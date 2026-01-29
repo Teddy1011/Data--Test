@@ -25,20 +25,15 @@ using namespace std;
     (*尚未往上層找投影點扣，因此此版Node a的樹有超過門檻的情況發生)
 */
 
-/* (2025.11.14目前要解)，2025.12.20已解
+/*
 若Pattern有2個Seq:
 一個Seq無法再被減(所有Iu皆為1)，仍有應減去而未減去的Utility
 一個雖仍有Iu可減，但已減掉該Seq應減去的Utility
 此時會導致Hiding failure
 (如Pattern 1-2,4,4)
 
-解決:若仍有Utility應減去而未減，把未減的值傳遞到下一筆序列，若整輪跑完還有未減完的，最多跑到第二輪。
+解決:若仍有Utility應減去而未減，再次去其他Seq減?
 */
-/* (2026.01.13)
-為了減少序列隱藏失敗的次數，新增一個最大可扣:Pattern的所有iu扣到剩1後，還有多少Utility可以扣。
-利用這個最大可扣去算rut，可以使有Utility，可扣值已經極低甚至是0的序列降低rut的值。
-也可以讓Utility更大的去承擔更多的rut去扣。
- */
 class SeqData
 {
 public:
@@ -288,7 +283,7 @@ void Read_Database(string DatabaseFileName)
                         {
                             SD.UtilityArray.push_back(a.second * stod(strline.substr(IndexOfLeftBrackets + 1, IndexOfRightBrackets - IndexOfLeftBrackets - 1))); // eu*iu
                             // 避免浮點數表示成3.10862e-015等數值(實則3.10862-0.15)
-                            if (SU - (a.second * stod(strline.substr(IndexOfLeftBrackets + 1, IndexOfRightBrackets - IndexOfLeftBrackets - 1))) < 001) // 如果SU扣完最後一個item後的值太小
+                            if (SU - (a.second * stod(strline.substr(IndexOfLeftBrackets + 1, IndexOfRightBrackets - IndexOfLeftBrackets - 1))) < 0.001) // 如果SU扣完最後一個item後的值太小
                             {
                                 SD.RuArray.push_back(0);
                             }
@@ -426,112 +421,6 @@ void BulidSingleItems(vector<SeqData> VecDataBase)
     }
 }
 
-void applyDeltaOnDB(int sid, int idx1b, int diffIu) //更新VecDataBase資料
-{
-    if (diffIu <= 0) return;
-
-    int idx0 = idx1b - 1;
-    auto &db = VecDataBase[sid];
-
-    // 透過 ItemArray 找到 item，再查 ExternalUt
-    int item = db.ItemArray[idx0];
-    auto it_eu = ExternalUt.find(item);
-    if (it_eu == ExternalUt.end()) return;
-
-    double eu = it_eu->second;
-    double deltaU = diffIu * eu;
-
-    db.UtilityArray[idx0] -= deltaU;
-
-    for (int k = 0; k < idx0; ++k)
-    {
-        db.RuArray[k] -= deltaU;
-    }
-}
-
-void applyDeltaAlongPath( //沿PatternPath更新資料
-    vector<L3_NodeInfo> &PatternPath,
-    int topSeqIdx,
-    int idx1b,
-    int diffIu,
-    double usedDelta,
-    int sid
-){
-    if (diffIu <= 0 || usedDelta <= 0) return;
-
-    int curSeqIdx = topSeqIdx;
-
-    // 從 leaf 一路往上
-    for (int pi = (int)PatternPath.size() - 1; pi >= 0; --pi)
-    {
-        auto &node = PatternPath[pi];
-        auto &seq  = node.L2_SeqInfo[curSeqIdx];
-
-        // 找出這個 idx1b 在該 pattern 序列中對應到哪些
-        auto itPosList = seq.IdxPos.find(idx1b);
-        if (itPosList != seq.IdxPos.end())
-        {
-            for (auto &L1Pos : itPosList->second)
-            {
-                int p  = L1Pos.first;   // 第幾個 instance
-                int pp = L1Pos.second;  // 該 instance 裡 VecIndex / VecIu / VecUtility 的位置
-
-                auto &inst = seq.L1_UtInfo[p];
-
-                // VecUtility
-                inst.VecUtility[pp] -= usedDelta;
-                // Iu（最多扣到 1）
-                inst.VecIu[pp] -= diffIu;
-                if (inst.VecIu[pp] < 1) inst.VecIu[pp] = 1;
-                // CaseUtility
-                inst.CaseUtility -= usedDelta;
-            }
-        }
-
-        // 重新計算此 pattern 在這個 sid 上的 SeqUt / SeqPEU
-        node.SumUt  -= seq.SeqUt;
-        node.SumPEU -= seq.SeqPEU;
-
-        seq.SeqUt      = 0;
-        seq.SeqPEU     = 0;
-        seq.SeqUtCase  = -1;
-        seq.SeqPEUCase = -1;
-
-        for (int x = 0; x < (int)seq.L1_UtInfo.size(); ++x)
-        {
-            auto &inst2 = seq.L1_UtInfo[x];
-
-            // Ut
-            if (inst2.CaseUtility > seq.SeqUt)
-            {
-                node.SumUt  -= seq.SeqUt;
-                node.SumUt  += inst2.CaseUtility;
-                seq.SeqUt    = inst2.CaseUtility;
-                seq.SeqUtCase = inst2.VecIndex.back();
-            }
-
-            // PEU
-            int idx1b_x = inst2.VecIndex.back();
-            int idx0_x  = idx1b_x - 1;
-            double ru_x = VecDataBase[seq.sid].RuArray[idx0_x];
-
-            if (ru_x > 0)
-            {
-                double candPEU = inst2.CaseUtility + ru_x;
-                if (candPEU > seq.SeqPEU)
-                {
-                    node.SumPEU  -= seq.SeqPEU;
-                    node.SumPEU  += candPEU;
-                    seq.SeqPEU    = candPEU;
-                    seq.SeqPEUCase = idx1b_x;
-                }
-            }
-        }
-        curSeqIdx = seq.IdxOfLastLevelSeq;
-        if (curSeqIdx < 0) break;
-    }
-}
-
 void UpdateSingleItem(vector<L3_NodeInfo> &Node_SingleItem, int Item)
 {
     int IdxItem = IdxNodeSingleItem[Item];
@@ -645,6 +534,7 @@ void Cout_HUSPL3(L3_NodeInfo L3_node)
     }
     cout << endl;
 }
+
 void Cout_SeqHUSPL3(L3_NodeInfo L3_node, int seq)
 {
     cout << "---------- Pattern:" << L3_node.pattern << " ----------" << endl;
@@ -696,6 +586,7 @@ void Cout_SeqHUSPL3(L3_NodeInfo L3_node, int seq)
     }
     cout << endl;
 }
+
 void Cout_IdxNodeSingleItem(map<int, int> IdxNodeSingleItem)
 {
     for (auto a : IdxNodeSingleItem)
@@ -760,451 +651,632 @@ void DeleteLowRSUFromlist(L3_NodeInfo NodeUC, set<int> &ilist, set<int> &slist)
     }
 }
 
-// 回傳：這一層處理完後，還有多少 Ut 沒扣完（>=0）
-double TraceBack(vector<L3_NodeInfo> &PatternPath,
-                 int TopNodeSeqIdx,   // 在 leafNode 裡這個 sid 的序列 index
-                 int LastSeqIdx,      // 目前這一層 pattern 的 Seq index
-                 int LastInsIdx,      // 目前這一層 pattern 的 Instance index
-                 double KeepReduceUt, // 還需要再扣多少 Utility
-                 int PathIdx,         // 現在在 path 上的層數 (2 表示從倒數第二層開始)
-                 int ExtendItemIdx   // S-extension 用，允許處理的最右 VecIndex
-){
-    if (KeepReduceUt <= 0) return 0;
-    if (PathIdx > (int)PatternPath.size()) return KeepReduceUt;
-
-    int curIdx = (int)PatternPath.size() - PathIdx; // 目前所在的 pattern index
-    if (curIdx < 0 || curIdx >= (int)PatternPath.size()) return KeepReduceUt;
-
-    // 判斷這層是從 S-extension 還是 I-extension 上來
-    bool fromSExt = false;
-    if (curIdx + 1 < (int)PatternPath.size())
+void TraceBack(vector<L3_NodeInfo> &PatternPath, int TopNodeSeqIdx, int LastSeqIdx, int LastInsIdx, double KeepReduceUt, int PathIdx, int ExtendItemIdx)
+{
+    // From I-extension
+    if (PatternPath[PatternPath.size() - PathIdx + 1].ExtensionType == 0)
     {
-        if (PatternPath[curIdx + 1].ExtensionType == 1)
-            fromSExt = true;
-    }
+        // cout << "* " << PatternPath[PatternPath.size() - PathIdx].get().pattern << " * ";
+        // cout << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].sid << endl;
 
-    auto &node = PatternPath[curIdx];
-    auto &seq  = node.L2_SeqInfo[LastSeqIdx];
-    auto &inst = seq.L1_UtInfo[LastInsIdx];
+        double KeepSeqUt = PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].SeqUt;
+        double KeepInsUt = PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].CaseUtility;
 
-    double KeepSeqUt = seq.SeqUt;
-    double KeepInsUt = inst.CaseUtility;
-
-    int idx1b = inst.VecIndex.back();
-    int idx0  = idx1b - 1;
-    int sid   = seq.sid;
-
-    // S-extension：只允許處理 index <= ExtendItemIdx
-    if (fromSExt && idx1b > ExtendItemIdx)
-    {
-        if (PathIdx + 1 <= (int)PatternPath.size())
+        if (KeepInsUt > (KeepSeqUt - KeepReduceUt))
         {
-            int nextSeqIdx = seq.IdxOfLastLevelSeq;
-            int nextInsIdx = inst.IdxOfLastLevelIns;
-            return TraceBack(PatternPath, TopNodeSeqIdx,
-                             nextSeqIdx, nextInsIdx,
-                             KeepReduceUt, PathIdx + 1, ExtendItemIdx);
+            double ReduceIu = ceil(KeepReduceUt / ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+            // Iu夠扣
+            if (PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIu.back() > ReduceIu)
+            {
+                /// VecDatabase ///
+                VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].UtilityArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].IuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] -= ReduceIu;
+                for (int i = 0; i < PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1; i++)
+                {
+                    VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].RuArray[i] -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                }
+                /// VecDatabase(end) ///
+
+                /// PatternPath Nodes ///
+                int n = TopNodeSeqIdx; // Keep住TopNode的sid來追整條path，在更新path時使用
+                for (int i = PatternPath.size() - 1; i >= 0; i--)
+                {
+                    // Cout_SeqHUSPL3(PatternPath[i], n);
+                    // cout << "--- " << PatternPath[i].get().pattern << " --- ";
+                    // cout << PatternPath[i].get().L2_SeqInfo[n].sid << endl;
+                    // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << "->";
+                    for (auto L1Pos : PatternPath[i].L2_SeqInfo[n].IdxPos[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back()])
+                    {
+                        // cout << "(" << L1Pos.first << "," << L1Pos.second << ")" << endl;
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIndex[L1Pos.second] << " ";
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] << " ";
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second];
+                        PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].CaseUtility -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                        PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second] -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                        PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] -= ReduceIu;
+                    }
+                    // cout << endl;
+
+                    // Utility、PEU重算
+                    PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                    PatternPath[i].L2_SeqInfo[n].SeqUt = 0;
+                    PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                    PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                    // Cout_SeqHUSPL3(PatternPath[i], n);
+                    for (int j = 0; j < PatternPath[i].L2_SeqInfo[n].L1_UtInfo.size(); j++)
+                    {
+                        // Utility
+                        if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility > PatternPath[i].L2_SeqInfo[n].SeqUt)
+                        {
+                            PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                            PatternPath[i].SumUt += PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                            PatternPath[i].L2_SeqInfo[n].SeqUt = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                            PatternPath[i].L2_SeqInfo[n].SeqUtCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                        }
+                        // PEU
+                        // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << endl;
+                        // cout << "ru=" << VecDataBase[PatternPath[i].get().L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] << endl;
+                        if (VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > 0)
+                        {
+                            if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > PatternPath[i].L2_SeqInfo[n].SeqPEU)
+                            {
+                                PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                                PatternPath[i].SumPEU += (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                PatternPath[i].L2_SeqInfo[n].SeqPEU = (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                PatternPath[i].L2_SeqInfo[n].SeqPEUCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                            }
+                            else if (PatternPath[i].L2_SeqInfo[n].SeqPEU == 0)
+                            {
+                                PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                            }
+                        }
+                    }
+                    n = PatternPath[i].L2_SeqInfo[n].IdxOfLastLevelSeq;
+                }
+                // cout << endl;
+                /// PatternPath Nodes(end) ///
+            }
+            else // Iu不夠扣
+            {
+                double KeepIu = VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].IuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1];
+                /// VecDatabase ///
+                VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].UtilityArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].IuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] = 1;
+                for (int i = 0; i < PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1; i++)
+                {
+                    VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].RuArray[i] -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                }
+                /// VecDatabase(end) ///
+
+                /// PatternPath Nodes ///
+                int n = TopNodeSeqIdx; // Keep住TopNode的sid來追整條path，在更新path時使用
+                for (int i = PatternPath.size() - 1; i >= 0; i--)
+                {
+                    // Cout_SeqHUSPL3(PatternPath[i], n);
+                    // cout << "--- " << PatternPath[i].get().pattern << " --- ";
+                    // cout << PatternPath[i].get().L2_SeqInfo[n].sid << endl;
+                    // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << "->";
+                    for (auto L1Pos : PatternPath[i].L2_SeqInfo[n].IdxPos[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back()])
+                    {
+                        // cout << "(" << L1Pos.first << "," << L1Pos.second << ")" << endl;
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIndex[L1Pos.second] << " ";
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] << " ";
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second];
+                        PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].CaseUtility -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                        PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second] -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                        PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] = 1;
+                    }
+                    // cout << endl;
+
+                    // Utility、PEU重算
+                    PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                    PatternPath[i].L2_SeqInfo[n].SeqUt = 0;
+                    PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                    PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                    // Cout_SeqHUSPL3(PatternPath[i], n);
+                    for (int j = 0; j < PatternPath[i].L2_SeqInfo[n].L1_UtInfo.size(); j++)
+                    {
+                        // Utility
+                        if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility > PatternPath[i].L2_SeqInfo[n].SeqUt)
+                        {
+                            PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                            PatternPath[i].SumUt += PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                            PatternPath[i].L2_SeqInfo[n].SeqUt = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                            PatternPath[i].L2_SeqInfo[n].SeqUtCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                        }
+                        // PEU
+                        // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << endl;
+                        // cout << "ru=" << VecDataBase[PatternPath[i].get().L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] << endl;
+                        if (VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > 0)
+                        {
+                            if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > PatternPath[i].L2_SeqInfo[n].SeqPEU)
+                            {
+                                PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                                PatternPath[i].SumPEU += (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                PatternPath[i].L2_SeqInfo[n].SeqPEU = (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                PatternPath[i].L2_SeqInfo[n].SeqPEUCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                            }
+                            else if (PatternPath[i].L2_SeqInfo[n].SeqPEU == 0)
+                            {
+                                PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                            }
+                        }
+                    }
+                    n = PatternPath[i].L2_SeqInfo[n].IdxOfLastLevelSeq;
+                }
+                // cout << endl;
+                /// PatternPath Nodes(end) ///
+                KeepReduceUt -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                TraceBack(PatternPath, TopNodeSeqIdx, PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].IdxOfLastLevelSeq, PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].IdxOfLastLevelIns, KeepReduceUt, PathIdx + 1, PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back());
+            }
         }
-        return KeepReduceUt;
     }
 
-    // 這個 Instance 的 Ut 不足以「篡位」，往上一層找
-    if (KeepInsUt <= (KeepSeqUt - KeepReduceUt))
+    // From S-extension
+    if (PatternPath[PatternPath.size() - PathIdx + 1].ExtensionType == 1)
     {
-        if (PathIdx + 1 <= (int)PatternPath.size())
+        // cout << "* " << PatternPath[PatternPath.size() - PathIdx].get().pattern << " * ";
+        // cout << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].sid << endl;
+
+        double KeepSeqUt = PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].SeqUt;
+        for (int i = PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo.size() - 1; i >= 0; i--)
         {
-            int nextSeqIdx = seq.IdxOfLastLevelSeq;
-            int nextInsIdx = inst.IdxOfLastLevelIns;
-            return TraceBack(PatternPath, TopNodeSeqIdx,
-                             nextSeqIdx, nextInsIdx,
-                             KeepReduceUt, PathIdx + 1, ExtendItemIdx);
+            double KeepInsUt = PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].CaseUtility;
+            if (PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[i].VecIndex.back() < ExtendItemIdx &&
+                KeepInsUt > (KeepSeqUt - KeepReduceUt))
+            {
+                double ReduceIu = ceil(KeepReduceUt / ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                // Iu夠扣
+                if (PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIu.back() > ReduceIu)
+                {
+                    /// VecDatabase ///
+                    VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].UtilityArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                    VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].IuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] -= ReduceIu;
+                    for (int i = 0; i < PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1; i++)
+                    {
+                        VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].RuArray[i] -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                    }
+                    /// VecDatabase(end) ///
+
+                    /// PatternPath Nodes ///
+                    int n = TopNodeSeqIdx; // Keep住TopNode的sid來追整條path，在更新path時使用
+                    for (int i = PatternPath.size() - 1; i >= 0; i--)
+                    {
+                        // Cout_SeqHUSPL3(PatternPath[i], n);
+                        // cout << "--- " << PatternPath[i].get().pattern << " --- ";
+                        // cout << PatternPath[i].get().L2_SeqInfo[n].sid << endl;
+                        // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << "->";
+                        for (auto L1Pos : PatternPath[i].L2_SeqInfo[n].IdxPos[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back()])
+                        {
+                            // cout << "(" << L1Pos.first << "," << L1Pos.second << ")" << endl;
+                            // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIndex[L1Pos.second] << " ";
+                            // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] << " ";
+                            // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second];
+                            PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].CaseUtility -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                            PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second] -= KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]));
+                            PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] -= ReduceIu;
+                        }
+                        // cout << endl;
+
+                        // Utility、PEU重算
+                        PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                        PatternPath[i].L2_SeqInfo[n].SeqUt = 0;
+                        PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                        PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                        // Cout_SeqHUSPL3(PatternPath[i], n);
+                        for (int j = 0; j < PatternPath[i].L2_SeqInfo[n].L1_UtInfo.size(); j++)
+                        {
+                            // Utility
+                            if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility > PatternPath[i].L2_SeqInfo[n].SeqUt)
+                            {
+                                PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                                PatternPath[i].SumUt += PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                                PatternPath[i].L2_SeqInfo[n].SeqUt = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                                PatternPath[i].L2_SeqInfo[n].SeqUtCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                            }
+                            // PEU
+                            // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << endl;
+                            // cout << "ru=" << VecDataBase[PatternPath[i].get().L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] << endl;
+                            if (VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > 0)
+                            {
+                                if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > PatternPath[i].L2_SeqInfo[n].SeqPEU)
+                                {
+                                    PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                                    PatternPath[i].SumPEU += (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                    PatternPath[i].L2_SeqInfo[n].SeqPEU = (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                    PatternPath[i].L2_SeqInfo[n].SeqPEUCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                                }
+                                else if (PatternPath[i].L2_SeqInfo[n].SeqPEU == 0)
+                                {
+                                    PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                                }
+                            }
+                        }
+                        n = PatternPath[i].L2_SeqInfo[n].IdxOfLastLevelSeq;
+                    }
+                    // cout << endl;
+                    /// PatternPath Nodes(end) ///
+                }
+                else // Iu不夠扣
+                {
+                    if (PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIu.back() > 1)
+                    {
+                        double KeepIu = VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].IuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1];
+                        /// VecDatabase ///
+                        VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].UtilityArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                        VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].IuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] = 1;
+                        for (int i = 0; i < PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1; i++)
+                        {
+                            VecDataBase[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].sid].RuArray[i] -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                        }
+                        /// VecDatabase(end) ///
+
+                        /// PatternPath Nodes ///
+                        int n = TopNodeSeqIdx; // Keep住TopNode的sid來追整條path，在更新path時使用
+                        for (int i = PatternPath.size() - 1; i >= 0; i--)
+                        {
+                            // Cout_SeqHUSPL3(PatternPath[i], n);
+                            // cout << "--- " << PatternPath[i].get().pattern << " --- ";
+                            // cout << PatternPath[i].get().L2_SeqInfo[n].sid << endl;
+                            // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << "->";
+                            for (auto L1Pos : PatternPath[i].L2_SeqInfo[n].IdxPos[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back()])
+                            {
+                                // cout << "(" << L1Pos.first << "," << L1Pos.second << ")" << endl;
+                                // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIndex[L1Pos.second] << " ";
+                                // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] << " ";
+                                // cout << PatternPath[i].get().L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second];
+                                PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].CaseUtility -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                                PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second] -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                                PatternPath[i].L2_SeqInfo[n].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] = 1;
+                            }
+                            // cout << endl;
+
+                            // Utility、PEU重算
+                            PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                            PatternPath[i].L2_SeqInfo[n].SeqUt = 0;
+                            PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                            PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                            // Cout_SeqHUSPL3(PatternPath[i], n);
+                            for (int j = 0; j < PatternPath[i].L2_SeqInfo[n].L1_UtInfo.size(); j++)
+                            {
+                                // Utility
+                                if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility > PatternPath[i].L2_SeqInfo[n].SeqUt)
+                                {
+                                    PatternPath[i].SumUt -= PatternPath[i].L2_SeqInfo[n].SeqUt;
+                                    PatternPath[i].SumUt += PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                                    PatternPath[i].L2_SeqInfo[n].SeqUt = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility;
+                                    PatternPath[i].L2_SeqInfo[n].SeqUtCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                                }
+                                // PEU
+                                // cout << "idx=" << PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() << endl;
+                                // cout << "ru=" << VecDataBase[PatternPath[i].get().L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] << endl;
+                                if (VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > 0)
+                                {
+                                    if (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1] > PatternPath[i].L2_SeqInfo[n].SeqPEU)
+                                    {
+                                        PatternPath[i].SumPEU -= PatternPath[i].L2_SeqInfo[n].SeqPEU;
+                                        PatternPath[i].SumPEU += (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                        PatternPath[i].L2_SeqInfo[n].SeqPEU = (PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].CaseUtility + VecDataBase[PatternPath[i].L2_SeqInfo[n].sid].RuArray[PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back() - 1]);
+                                        PatternPath[i].L2_SeqInfo[n].SeqPEUCase = PatternPath[i].L2_SeqInfo[n].L1_UtInfo[j].VecIndex.back();
+                                    }
+                                    else if (PatternPath[i].L2_SeqInfo[n].SeqPEU == 0)
+                                    {
+                                        PatternPath[i].L2_SeqInfo[n].SeqPEU = 0;
+                                    }
+                                }
+                            }
+                            n = PatternPath[i].L2_SeqInfo[n].IdxOfLastLevelSeq;
+                        }
+                        // cout << endl;
+                        /// PatternPath Nodes(end) ///
+                        KeepReduceUt -= ((KeepIu - 1) * ExternalUt[PatternPath[PatternPath.size() - PathIdx].VecPattern.back()]);
+                    }
+                    TraceBack(PatternPath, TopNodeSeqIdx, PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].IdxOfLastLevelSeq, PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].IdxOfLastLevelIns, KeepReduceUt, PathIdx + 1, PatternPath[PatternPath.size() - PathIdx].L2_SeqInfo[LastSeqIdx].L1_UtInfo[LastInsIdx].VecIndex.back());
+                }
+            }
         }
-        return KeepReduceUt;
     }
-
-    // 取得本層 item 的 EU
-    int item = node.VecPattern.back();
-    auto it_eu = ExternalUt.find(item);
-    if (it_eu == ExternalUt.end())
-    {
-        if (PathIdx + 1 <= (int)PatternPath.size())
-        {
-            int nextSeqIdx = seq.IdxOfLastLevelSeq;
-            int nextInsIdx = inst.IdxOfLastLevelIns;
-            return TraceBack(PatternPath, TopNodeSeqIdx,
-                             nextSeqIdx, nextInsIdx,
-                             KeepReduceUt, PathIdx + 1, ExtendItemIdx);
-        }
-        return KeepReduceUt;
-    }
-    double eu = it_eu->second;
-
-    int oldIu = VecDataBase[sid].IuArray[idx0];
-    if (oldIu <= 1)
-    {
-        // 這個位置已經 Iu=1，往上一層試試
-        if (PathIdx + 1 <= (int)PatternPath.size())
-        {
-            int nextSeqIdx = seq.IdxOfLastLevelSeq;
-            int nextInsIdx = inst.IdxOfLastLevelIns;
-            return TraceBack(PatternPath, TopNodeSeqIdx,
-                             nextSeqIdx, nextInsIdx,
-                             KeepReduceUt, PathIdx + 1, ExtendItemIdx);
-        }
-        return KeepReduceUt;
-    }
-
-    // 這個位置最多能扣的 IU & Ut
-    int maxDiffIu    = oldIu - 1;          // 至少保留 1
-    double maxDeltaU = maxDiffIu * eu;
-
-    double needU   = KeepReduceUt;
-    double usedDelta = min(needU, maxDeltaU);
-
-    int diffIu = (int)ceil(usedDelta / eu);
-    if (diffIu > maxDiffIu) diffIu = maxDiffIu;
-    usedDelta = diffIu * eu; // 實際扣掉的 Ut
-
-    int newIu = oldIu - diffIu;
-    VecDataBase[sid].IuArray[idx0] = newIu;
-
-    // 更新 DB (Utility + RU)
-    applyDeltaOnDB(sid, idx1b, diffIu);
-
-    // 沿 PatternPath 更新 pattern nodes
-    applyDeltaAlongPath(PatternPath, TopNodeSeqIdx, idx1b, diffIu, usedDelta, sid);
-
-    // 更新還需要扣多少
-    KeepReduceUt -= usedDelta;
-    if (KeepReduceUt <= 0) return 0;
-
-    // 還有剩，往上一層 pattern 繼續 TraceBack
-    if (PathIdx + 1 <= (int)PatternPath.size())
-    {
-        int nextSeqIdx = seq.IdxOfLastLevelSeq;
-        int nextInsIdx = inst.IdxOfLastLevelIns;
-        return TraceBack(PatternPath, TopNodeSeqIdx,
-                         nextSeqIdx, nextInsIdx,
-                         KeepReduceUt, PathIdx + 1, ExtendItemIdx);
-    }
-    return KeepReduceUt;
 }
 
 // 有動到VecPattern的第一個item(也就是root)才要更新該single node
+
 void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
 {
-    if (PatternPath.empty()) return;
-
-    L3_NodeInfo &leafNode = PatternPath.back();
-
-    // 1. 計算目標 Diff
-    double diff = leafNode.SumUt - MinUtil + 1; 
-    if (diff <= 0) return;
-
-    // 2. 取得 External Utility
-    int item = leafNode.VecPattern.back();
-    double eu = 0;
-    auto it_eu = ExternalUt.find(item);
-    
-    // 這裡做個防呆，若有 EU 才取值
-    if (it_eu != ExternalUt.end()) {
-        eu = it_eu->second;
-    }
-
-    // [Step 1] 計算 MDU (On-the-fly Calculation)
-    vector<double> VecSeqMDU(leafNode.L2_SeqInfo.size(), 0.0);
-    double TotalMDU = 0;
-
-    // 只有當 eu > 0 時計算 MDU 才有意義
-    if (eu > 0) {
-        for (int i = 0; i < (int)leafNode.L2_SeqInfo.size(); ++i) {
-            auto &seq = leafNode.L2_SeqInfo[i];
-            double seqMDU = 0;
-            
-            for (auto &inst : seq.L1_UtInfo) {
-                // Leaf Node 對應 VecIu 的最後一個
-                int curIu = inst.VecIu.back();
-                
-                // 只有大於 1 的部分算作有效 MDU (表層可扣量)
-                if (curIu > 1) {
-                    seqMDU += (curIu - 1) * eu;
-                }
-            }
-            VecSeqMDU[i] = seqMDU;
-            TotalMDU += seqMDU;
-        }
-    }
-
-    // [Step 2] 隱藏迴圈 (Round-based + Debt Transfer)
-    double curdiff = diff;      
-    double Unpaidrut = 0;       // 累積債務
-    int RoundCounter = 0;
-    int MaxRound = 2;           // 二輪機制：確保最後累積的債務能回頭找人消化
-
-    while (curdiff > 0 && RoundCounter < MaxRound)
+    if (PatternPath.empty())
+        return;
+    /*
+    for (int i = PatternPath.size() - 1; i >= 0; i--)
     {
-        RoundCounter++;
-        double RutInThisRound = 0; 
-
-        for (int i = 0; i < (int)leafNode.L2_SeqInfo.size(); ++i)
+        cout << PatternPath[i].pattern << endl;
+    }
+    cout << endl;
+    */
+    // 投影點處理
+    double diff = PatternPath.back().SumUt - MinUtil + 1;          // diff多1避免整除使SumUt等於門檻
+    double KeepSumUt = PatternPath.back().SumUt;                   // 避免前面的Instance處理後、SumUt減少影響到後續計算
+    for (int i = 0; i < PatternPath.back().L2_SeqInfo.size(); i++) // Seq正序(1,2,3...)讀取
+    {
+        // Cout_SeqHUSPL3(PatternPath.back(), i);
+        double KeepSeqUt = PatternPath.back().L2_SeqInfo[i].SeqUt;
+        double ReduceUt = ceil(diff * (KeepSeqUt / KeepSumUt));
+        // for (int j = PatternPath.back().get().L2_SeqInfo[i].L1_UtInfo.size() - 1; j >= 0; j--) // Instance由後往前(較後的Instacne投影點Index較大，處理後，前面的投影點Index也一併處理到了)
+        for (int j = 0; j < PatternPath.back().L2_SeqInfo[i].L1_UtInfo.size(); j++) // Instance由後往前(較後的Instacne投影點Index較大，處理後，前面的投影點Index也一併處理到了)
         {
-            // 目標達成且無債務，提早結束
-            if (curdiff <= 0 && Unpaidrut <= 0) break;
-
-            auto &seq = leafNode.L2_SeqInfo[i];
-            double KeepSeqUt = seq.SeqUt;
-
-            // 跳過無效序列
-            if (KeepSeqUt <= 0) continue;
-
-            double AllocUt = 0;
-
-            if (TotalMDU > 0) {
-                // 策略 A: MDU 優先模式
-                // 依照剛剛算出來的 MDU 比例分配
-                AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
-            } else {
-                // 策略 B: Fallback 模式 (萬一表層全乾了 TotalMDU=0)
-                // 退回使用 SeqUt 分配，強迫進入 TraceBack 尋找深層機會
-                if (leafNode.SumUt > 0) {
-                    AllocUt = ceil(diff * (KeepSeqUt / leafNode.SumUt));
-                }
-            }
-
-            // 本次目標 = 分配額度 + 債務
-            double TargetReduce = AllocUt + Unpaidrut;
-            if (TargetReduce <= 0) continue;
-
-            double ActualReduced = 0;       
-            double KeepReduceUt = TargetReduce; 
-
-            // --- [執行扣除] ---
-            for (int j = 0; j < (int)seq.L1_UtInfo.size(); ++j)
+            // cout << "CaseUt:" << PatternPath.back().get().L2_SeqInfo[i].L1_UtInfo[j].CaseUtility << endl;
+            double KeepReduceUt = ReduceUt;                                                             // 避免各Instance應各自減少的ReduceUt少減了
+            if (PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].CaseUtility > (KeepSeqUt - KeepReduceUt)) // 可能"篡位"的Instance才須處理
             {
-                if (KeepReduceUt <= 0) break;
-
-                auto &inst = seq.L1_UtInfo[j];
-                double currentSeqUt = seq.SeqUt; // 確保拿到最新的
-
-                // 篡位檢查
-                if (inst.CaseUtility <= (currentSeqUt - KeepReduceUt))
-                    continue;
-
-                int sid = seq.sid;
-                int idx1b = inst.VecIndex.back();
-                int idx0 = idx1b - 1;
-                
-                double localDropped = 0;
-
-                // 直讀結構內 IU
-                int curIu = inst.VecIu.back(); 
-
-                // 1. 嘗試扣除 Leaf Node
-                if (curIu > 1 && eu > 0)
+                // 各Instance減去的量為 : InstanceUt -=  (InstanceUt - (SeqUt - (ReduceIu * Eu)))
+                double ReduceIu = ceil(ReduceUt / ExternalUt[PatternPath.back().VecPattern.back()]);
+                double KeepInsUt = PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].CaseUtility;
+                // 投影點Iu夠扣
+                if (PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIu.back() > ReduceIu)
                 {
-                    int maxDiffIu = curIu - 1;
-                    double maxDeltaU = maxDiffIu * eu;
-                    
-                    double needU = KeepReduceUt;
-                    double usedDelta = min(needU, maxDeltaU);
+                    // Cout_SeqHUSPL3(PatternPath.back(), i);
+                    /**************** VecDatabase ***************/
+                    // Utility(VecDataBase)
+                    VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].UtilityArray[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1] -= (KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath.back().VecPattern.back()])));
 
-                    // 轉為整數
-                    int diffIu = (int)ceil(usedDelta / eu);
-                    if (diffIu > maxDiffIu) diffIu = maxDiffIu;
-                    usedDelta = diffIu * eu;
-                    int newIu = curIu - diffIu;
+                    // Iu(VecDataBase)
+                    VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].IuArray[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1] -= ReduceIu;
 
-                    // Update Data (Structure + DB + Pattern)
-                    inst.VecIu.back() = newIu;
-                    inst.VecUtility.back() -= usedDelta;
-                    inst.CaseUtility -= usedDelta;
+                    // Ru(VecDataBase)
+                    for (int k = 0; k < PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1; k++)
+                    {
+                        VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].RuArray[k] -= (KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath.back().VecPattern.back()])));
+                    }
+                    /**************** VecDatabase(end) ***************/
 
-                    if (idx1b == seq.SeqUtCase) {
-                        seq.SeqUt -= usedDelta;
-                        // leafNode.SumUt 稍後更新
+                    ///// PatternPath's nodes(Iu>1) /////
+                    int LastSeqIdx = i;
+                    for (int k = PatternPath.size() - 1; k >= 0; k--)
+                    {
+                        // cout << PatternPath[k].get().pattern << endl;
+                        // cout << "Index:" << PatternPath.back().get().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() << "--->";
+                        for (auto L1Pos : PatternPath[k].L2_SeqInfo[LastSeqIdx].IdxPos[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back()])
+                        {
+                            // cout << "(" << L1Pos.first << "," << L1Pos.second << ")";
+                            // cout << PatternPath[k].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].VecIndex[L1Pos.second] << " ";
+
+                            //  VecUtility
+                            PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second] -= (KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath.back().VecPattern.back()])));
+                            // Iu
+                            PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] -= ReduceIu;
+                            // Instance Utility
+                            PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].CaseUtility -= (KeepInsUt - (KeepSeqUt - (ReduceIu * ExternalUt[PatternPath.back().VecPattern.back()])));
+                        }
+
+                        // Utility、PEU重新計算
+                        PatternPath[k].SumUt -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt;
+                        PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt = 0;
+                        PatternPath[k].SumPEU -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU;
+                        PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU = 0;
+                        for (int x = 0; x < PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo.size(); x++)
+                        {
+                            // Ut
+                            if (PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility > PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt)
+                            {
+                                PatternPath[k].SumUt -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt;
+                                PatternPath[k].SumUt += PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility;
+                                PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility;
+                                PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUtCase = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back();
+                            }
+                            // PEU
+                            if (VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1] > 0)
+                            {
+                                if (PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility + VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1] > PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU)
+                                {
+                                    PatternPath[k].SumPEU -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU;
+                                    PatternPath[k].SumPEU += PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility + VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1];
+                                    PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility + VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1];
+                                    PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEUCase = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back();
+                                }
+                            }
+                            else if (PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU == 0)
+                            {
+                                PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU = 0;
+                            }
+                        }
+                        LastSeqIdx = PatternPath[k].L2_SeqInfo[LastSeqIdx].IdxOfLastLevelSeq;
+                    }
+                    ///// PatternPath's nodes(Iu>1)(end) /////
+                }
+                else // 投影點Iu不夠扣
+                {
+                    // 反之Iu=1的有更新跟沒更新一樣，不用浪費執行時間
+                    if (PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIu.back() > 1)
+                    {
+                        double KeepIu = VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].IuArray[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1];
+                        /*************** VecDatabase **************/
+                        // Utility(VecDataBase)
+                        VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].UtilityArray[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1] -= ((KeepIu - 1) * ExternalUt[PatternPath.back().VecPattern.back()]);
+
+                        // Iu(VecDataBase)
+                        VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].IuArray[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1] = 1;
+
+                        // Ru(VecDataBase)
+                        for (int k = 0; k < PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1; k++)
+                        {
+                            VecDataBase[PatternPath.back().L2_SeqInfo[i].sid].RuArray[k] -= ((KeepIu - 1) * ExternalUt[PatternPath.back().VecPattern.back()]);
+                        }
+                        /*************** VecDatabase(end) **************/
+
+                        ///// PatternPath's nodes(Iu<=1) /////
+                        int LastSeqIdx = i;
+                        for (int k = PatternPath.size() - 1; k >= 0; k--)
+                        {
+                            // cout << PatternPath[k].get().pattern << endl;
+                            // cout << "Index:" << PatternPath.back().get().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() << "--->";
+                            for (auto L1Pos : PatternPath[k].L2_SeqInfo[LastSeqIdx].IdxPos[PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back()])
+                            {
+                                // cout << "(" << L1Pos.first << "," << L1Pos.second << ")";
+                                // cout << PatternPath[k].get().L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].VecIndex[L1Pos.second] << " ";
+
+                                //  VecUtility
+                                PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].VecUtility[L1Pos.second] -= ((KeepIu - 1) * ExternalUt[PatternPath.back().VecPattern.back()]);
+                                // Iu
+                                PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].VecIu[L1Pos.second] = 1;
+                                // Instance Utility
+                                PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[L1Pos.first].CaseUtility -= ((KeepIu - 1) * ExternalUt[PatternPath.back().VecPattern.back()]);
+                            }
+
+                            // Utility、PEU重新計算
+                            PatternPath[k].SumUt -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt;
+                            PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt = 0;
+                            PatternPath[k].SumPEU -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU;
+                            PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU = 0;
+                            for (int x = 0; x < PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo.size(); x++)
+                            {
+                                // Ut
+                                if (PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility > PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt)
+                                {
+                                    PatternPath[k].SumUt -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt;
+                                    PatternPath[k].SumUt += PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility;
+                                    PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUt = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility;
+                                    PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqUtCase = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back();
+                                }
+                                // PEU
+                                if (VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1] > 0)
+                                {
+                                    if (PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility + VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1] > PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU)
+                                    {
+                                        PatternPath[k].SumPEU -= PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU;
+                                        PatternPath[k].SumPEU += PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility + VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1];
+                                        PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].CaseUtility + VecDataBase[PatternPath[k].L2_SeqInfo[LastSeqIdx].sid].RuArray[PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back() - 1];
+                                        PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEUCase = PatternPath[k].L2_SeqInfo[LastSeqIdx].L1_UtInfo[x].VecIndex.back();
+                                    }
+                                }
+                                else if (PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU == 0)
+                                {
+                                    PatternPath[k].L2_SeqInfo[LastSeqIdx].SeqPEU = 0;
+                                }
+                            }
+                            LastSeqIdx = PatternPath[k].L2_SeqInfo[LastSeqIdx].IdxOfLastLevelSeq;
+                        }
+                        ///// PatternPath's nodes(Iu<=1)(end) /////
+
+                        // ReduceUt減去投影點可以處理的量，剩餘的往下遞迴給前幾層
+                        KeepReduceUt -= ((KeepIu - 1) * ExternalUt[PatternPath.back().VecPattern.back()]);
                     }
 
-                    VecDataBase[sid].IuArray[idx0] = newIu;
-                    applyDeltaOnDB(sid, idx1b, diffIu);
-                    applyDeltaAlongPath(PatternPath, i, idx1b, diffIu, usedDelta, sid);
+                    // 以Instance為單位做遞迴為回找
+                    // PathIdx=1即PatternPath.back(),已在REIHUSP()處理完畢,從PathIdx=2開始回溯(TraceBack)
+                    // cout << endl;
+                    // cout << "*** " << PatternPath.back().get().pattern << " *** ";
+                    // cout << PatternPath.back().get().L2_SeqInfo[i].sid << endl;
 
-                    localDropped += usedDelta;
-                    KeepReduceUt -= usedDelta;
+                    TraceBack(PatternPath, i, PatternPath.back().L2_SeqInfo[i].IdxOfLastLevelSeq, PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].IdxOfLastLevelIns, KeepReduceUt, 2, PatternPath.back().L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back());
                 }
-
-                // TraceBack
-                if (KeepReduceUt > 0)
-                {
-                    double remain = TraceBack(
-                        PatternPath,
-                        i,                       
-                        seq.IdxOfLastLevelSeq,   
-                        inst.IdxOfLastLevelIns,  
-                        KeepReduceUt,            
-                        2,                       
-                        idx1b                    
-                    );
-                    double traceAmount = KeepReduceUt - remain; 
-                    localDropped += traceAmount;
-                    KeepReduceUt = remain; 
-                }
-
-                ActualReduced += localDropped;
-            } // end instance loop
-
-            RutInThisRound += ActualReduced;
-            
-            // [債務轉移]
-            if (ActualReduced < TargetReduce) {
-                Unpaidrut = TargetReduce - ActualReduced;
-            } else {
-                Unpaidrut = 0; 
             }
-
-        } // end seq loop
-
-        curdiff -= RutInThisRound;
-        if (curdiff < 0) curdiff = 0;
-        
-        // 防呆
-        if (RutInThisRound == 0 && curdiff > 0) break;
-
-    } // end while
+        }
+    }
 }
 
 void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
 {
-    if (IdxNodeSingleItem.find(Item) == IdxNodeSingleItem.end()) return;
     int IdxItem = IdxNodeSingleItem[Item];
-    
     double diff = Node_SingleItem[IdxItem].SumUt - MinUtil + 1;
-    if (diff <= 0) return;
+    double KeepSumUt = Node_SingleItem[IdxItem].SumUt;
+    /*
+    cout << "*** " << Node_SingleItem[IdxItem].pattern << " ***" << endl;
+    cout << "SumUt=" << KeepSumUt << endl;
+    cout << "diff=" << diff << endl;
+    */
+    for (int i = 0; i < Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++)
+    {
+        double KeepSeqUt = Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqUt;
+        double ReduceUt = ceil(diff * (KeepSeqUt / KeepSumUt));
+        /*
+        cout << "Seq " << Node_SingleItem[IdxItem].L2_SeqInfo[i].sid << endl;
+        cout << "SeqUt:" << Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqUt << endl;
+        cout << "ReduceUt:" << ReduceUt << endl;
+        */
+        for (int j = 0; j < Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo.size(); j++)
+        {
+            double ReduceUtEachIns = ReduceUt; // 下一個Instance會再讀一次原本該扣的ReduceUt，不會被之前案例影響到該Reduce的值
+            if (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].CaseUtility > (KeepSeqUt - ReduceUtEachIns))
+            {
+                double ReduceIu = ceil(ReduceUtEachIns / ExternalUt[Item]);
+                /*
+                cout << "[" << Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] << "]";
+                cout << "[" << Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] << "]";
+                cout << "[" << Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecUtility[0] << "]";
+                cout << Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].CaseUtility << endl;
+                cout << ReduceIu << endl;
+                */
+                if (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] > ReduceIu)
+                {
+                    // Utility
+                    Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecUtility[0] -= ReduceIu * ExternalUt[Item];
+                    VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].UtilityArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1] -= ReduceIu * ExternalUt[Item];
 
-    double eu = 0;
-    auto it_eu = ExternalUt.find(Item);
-    if (it_eu == ExternalUt.end()) return;
-    eu = it_eu->second;
+                    // Iu
+                    Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] -= ReduceIu;
+                    VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].IuArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1] -= ReduceIu;
 
-    // [Step 1] 即時計算 MDU
-    vector<double> VecSeqMDU(Node_SingleItem[IdxItem].L2_SeqInfo.size(), 0.0);
-    double TotalMDU = 0;
-    
-    for (int i = 0; i < (int)Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++) {
-        auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
-        double seqMDU = 0;
-        for(auto &inst : seq.L1_UtInfo) {
-            // 直讀 VecIu[0]
-            if(inst.VecIu[0] > 1) {
-                seqMDU += (inst.VecIu[0] - 1) * eu;
+                    // CaseUtility
+                    Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].CaseUtility -= ReduceIu * ExternalUt[Item];
+
+                    // Ru(VecDatabase)
+                    for (int k = 0; k < Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1; k++)
+                    {
+                        // cout << VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].RuArray[k] << " ";
+                        VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].RuArray[k] -= ReduceIu * ExternalUt[Item];
+                    }
+                    // cout << endl;
+
+                    // SeqUt、SumUt
+                    if (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] == Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqUtCase)
+                    {
+                        Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqUt -= ReduceIu * ExternalUt[Item];
+                        Node_SingleItem[IdxItem].SumUt -= ReduceIu * ExternalUt[Item];
+                    }
+                    // SeqPEU、SumPEU
+                    if (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] == Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEUCase)
+                    {
+                        Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEU -= ReduceIu * ExternalUt[Item];
+                        Node_SingleItem[IdxItem].SumPEU -= ReduceIu * ExternalUt[Item];
+                    }
+                }
+                else
+                {
+                    // Utility
+                    Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecUtility[0] -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+                    VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].UtilityArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1] -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+
+                    // CaseUtility
+                    Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].CaseUtility -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+
+                    // Ru(VecDatabase)
+                    for (int k = 0; k < Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1; k++)
+                    {
+                        // cout << VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].RuArray[k] << " ";
+                        VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].RuArray[k] -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+                    }
+                    // cout << endl;
+
+                    // SeqUt、SumUt
+                    if (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] == Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqUtCase)
+                    {
+                        Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqUt -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+                        Node_SingleItem[IdxItem].SumUt -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+                    }
+                    // SeqPEU、SumPEU
+                    if (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] == Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEUCase)
+                    {
+                        Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEU -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+                        Node_SingleItem[IdxItem].SumPEU -= (Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] - 1) * ExternalUt[Item];
+                    }
+
+                    // Iu
+                    Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIu[0] = 1;
+                    VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].IuArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1] = 1;
+                }
             }
         }
-        VecSeqMDU[i] = seqMDU;
-        TotalMDU += seqMDU;
+        // cout << endl;
     }
-
-    // [Step 2] 隱藏迴圈
-    double curdiff = diff;
-    double Unpaidrut = 0; 
-    int RoundCounter = 0;
-    int MaxRound = 2;
-
-    while (curdiff > 0 && RoundCounter < MaxRound)
-    {
-        RoundCounter++;
-        double RutInThisRound = 0;
-
-        for (int i = 0; i < (int)Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++)
-        {
-            if (curdiff <= 0 && Unpaidrut <= 0) break;
-
-            auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
-            double KeepSeqUt = seq.SeqUt;
-
-            if (KeepSeqUt <= 0) continue;
-
-            // 分配邏輯
-            double AllocUt = 0;
-            if (TotalMDU > 0) {
-                 AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
-            } else {
-                 // Fallback
-                 if (Node_SingleItem[IdxItem].SumUt > 0)
-                    AllocUt = ceil(diff * (KeepSeqUt / Node_SingleItem[IdxItem].SumUt));
-            }
-            
-            double TargetReduce = AllocUt + Unpaidrut;
-            if (TargetReduce <= 0) continue;
-
-            double ActualReduced = 0;
-            double KeepReduceUt = TargetReduce;
-
-            for (int j = 0; j < (int)seq.L1_UtInfo.size(); j++)
-            {
-                if (KeepReduceUt <= 0) break;
-                auto &inst = seq.L1_UtInfo[j];
-
-                if (inst.CaseUtility <= (KeepSeqUt - KeepReduceUt)) 
-                    continue;
-
-                int sid = seq.sid;
-                int idx1b = inst.VecIndex[0];
-                int idx0 = idx1b - 1;
-                
-                double localDropped = 0;
-                
-                // 直讀 IU
-                int curIu = inst.VecIu[0]; 
-
-                if (curIu > 1)
-                {
-                    int maxDiffIu = curIu - 1;
-                    double maxDeltaU = maxDiffIu * eu;
-                    
-                    double needU = KeepReduceUt;
-                    double usedDelta = min(needU, maxDeltaU);
-                    
-                    int diffIu = (int)ceil(usedDelta / eu);
-                    if (diffIu > maxDiffIu) diffIu = maxDiffIu;
-                    usedDelta = diffIu * eu;
-                    int newIu = curIu - diffIu;
-                    
-                    // Update
-                    inst.VecUtility[0] -= usedDelta;
-                    inst.VecIu[0] = newIu;
-                    inst.CaseUtility -= usedDelta;
-                    
-                    if (idx1b == seq.SeqUtCase) {
-                        seq.SeqUt -= usedDelta;
-                        Node_SingleItem[IdxItem].SumUt -= usedDelta;
-                    }
-                    if (idx1b == seq.SeqPEUCase) {
-                        seq.SeqPEU -= usedDelta;
-                        Node_SingleItem[IdxItem].SumPEU -= usedDelta;
-                    }
-                    
-                    VecDataBase[sid].IuArray[idx0] = newIu;
-                    applyDeltaOnDB(sid, idx1b, diffIu);
-
-                    localDropped = usedDelta;
-                    KeepReduceUt -= usedDelta;
-                }
-                ActualReduced += localDropped;
-            }
-
-            RutInThisRound += ActualReduced;
-
-            if (ActualReduced < TargetReduce) {
-                Unpaidrut = TargetReduce - ActualReduced;
-            } else {
-                Unpaidrut = 0;
-            }
-        } 
-
-        curdiff -= RutInThisRound;
-        if (curdiff < 0) curdiff = 0;
-        
-        if (RutInThisRound == 0 && curdiff > 0) break;
-    }
+    // cout << endl;
 }
 
 void HUSP(L3_NodeInfo &NodeUC)
@@ -1274,7 +1346,7 @@ void HUSP(L3_NodeInfo &NodeUC)
 
                             // SeqUt、SumUt
                             NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt = UIF.CaseUtility;
-                            NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();//減過1
+                            NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();
                             NIF.SumUt += UIF.CaseUtility;
 
                             // SeqPEU、SumPEU
@@ -1335,7 +1407,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumUt += (UIF.CaseUtility - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt = UIF.CaseUtility;
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();//減過1
+                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();
                                 }
 
                                 // ru!=0 且 acu+ru比現存的SeqPEU大，比較出SeqPEU
@@ -1376,7 +1448,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumUt += (UIF.CaseUtility - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt = UIF.CaseUtility;
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();//減過1
+                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();
                                 }
                                 // SeqPEU、SumPEU
                                 if (VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1] != 0 &&
@@ -1437,7 +1509,7 @@ void HUSP(L3_NodeInfo &NodeUC)
         }
         if (NIF.VecPattern.size() <= 3)
         {
-            //Cout_HUSPL3(NIF);
+            // Cout_HUSPL3(NIF);
         }
 
         HUSP(NIF);
@@ -1507,7 +1579,7 @@ void HUSP(L3_NodeInfo &NodeUC)
 
                             // SeqUt、SumUt
                             NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt = UIF.CaseUtility;
-                            NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();//減過1
+                            NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();
                             NIF.SumUt += UIF.CaseUtility;
 
                             // SeqPEU、SumPEU
@@ -1568,7 +1640,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumUt += (UIF.CaseUtility - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt = UIF.CaseUtility;
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();//減過1
+                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back();
                                 }
 
                                 // ru!=0 且 acu+ru比現存的SeqPEU大，比較出SeqPEU
@@ -1605,7 +1677,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumUt += (UIF.CaseUtility - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUt = UIF.CaseUtility;
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back(); // Record Cases of Over MinUtil.減過1
+                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqUtCase = UIF.VecIndex.back(); // Record Cases of Over MinUtil.
                                 }
                                 // SeqPEU、SumPEU
                                 if (VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1] != 0 &&
@@ -1670,7 +1742,7 @@ void HUSP(L3_NodeInfo &NodeUC)
         }
         if (NIF.VecPattern.size() <= 3)
         {
-            //Cout_HUSPL3(NIF);
+            // Cout_HUSPL3(NIF);
         }
         HUSP(NIF);
     }
@@ -1745,22 +1817,18 @@ int main()
     ExternalUt.insert(make_pair(0, 0));
     cout << endl;
 
-    str_EuFile = "simple_utb.txt";
-    str_DBFile = "simple_db.txt";
+    //str_EuFile = "simple_utb.txt";
+    //str_DBFile = "simple_db.txt";
 
-    /*
-    str_EuFile = "jzwpaper_utb.txt";
-    str_DBFile = "jzwpaper_db.txt";
-    */
     
-    //str_EuFile = "05.foodmart_ExternalUtility.txt";
-    //str_DBFile = "05.foodmart.txt";
+    str_EuFile = "05.foodmart_ExternalUtility.txt";
+    str_DBFile = "05.foodmart.txt";
     
     
     //str_EuFile = "4_sign_ExternalUtility.txt";
     //str_DBFile = "4_sign.txt";
     
-    MinUtil = 584;
+    MinUtil = 2752;
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
@@ -1773,12 +1841,12 @@ int main()
     // cout << "Start Building Single Items..." << endl;
     BulidSingleItems(VecDataBase);
 
-    //  Cout_VecDB(VecDataBase);
+    // Cout_VecDB(VecDataBase);
     //  Cout_ExternalUt(ExternalUt);
     //  cout << endl;
     //  Cout_IdxNodeSingleItem(IdxNodeSingleItem);
 
-    //double Threshold = 1;
+    double Threshold = 1;
     // double MinUtil = SumSWU * Threshold;
     // double MinUtil = 0;
     // cout << MinUtil << "=" << SumSWU << "*" << Threshold << endl;
@@ -1791,9 +1859,7 @@ int main()
     {
         // Cout_HUSPL3(Node_SingleItem[i]);
         //   cout << "Start Update SingleItem info " << Node_SingleItem[i].pattern << " ..." << endl;
-        cout << Node_SingleItem[i].SumUt <<"-->" << i << "-->" ;
         UpdateSingleItem(Node_SingleItem, stoi(Node_SingleItem[i].pattern)); // 重讀一次Single Itme在DB的資訊(因為被其他Node改到)
-        cout << Node_SingleItem[i].SumUt << endl;
         if (Node_SingleItem[i].SumUt >= MinUtil)
         {
             Single_ItemCounter++;
@@ -1813,7 +1879,7 @@ int main()
 
     cout << endl;
     cout << "SWU : " << SumSWU << endl;
-    //cout << "Threshold : " << Threshold << endl;
+    cout << "Threshold : " << Threshold << endl;
     cout << "Database:" << str_DBFile << endl;
     cout << "*** MinUtil = " << MinUtil << " ***" << endl;
     cout << "Single item Counter : " << Single_ItemCounter << endl;
