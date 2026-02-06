@@ -16,6 +16,7 @@
 #include <memory> // for unique_ptr
 
 using namespace std;
+ofstream GraphFile; //畫圖
 /*
 - 投影點夠扣、不夠扣設為1、Node和DB資料一致完成
 - 當一次做a、b時，因為a的Node可能被b修改，因此Node a的資訊未必是最新的(但能保證不超過門檻)
@@ -62,7 +63,7 @@ public:
     // vector<int> VecTid;
     vector<int> VecIu; // 其實可查表?
     vector<double> VecUtility;
-    double CaseUtility;
+    double CaseUtility = 0;
     int IdxOfLastLevelIns = 0;
 };
 class L2_SequenceInfo
@@ -898,7 +899,8 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
     L3_NodeInfo &leafNode = PatternPath.back();
 
     // 1. 計算目標 Diff
-    double diff = leafNode.SumUt - MinUtil + 1; 
+    double diff = leafNode.SumUt - MinUtil + 1;
+    //cout << "diff: " << diff << "---- " << endl; 
     if (diff <= 0) return;
 
     // 2. 取得 External Utility
@@ -906,12 +908,12 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
     double eu = 0;
     auto it_eu = ExternalUt.find(item);
     
-    // 這裡做個防呆，若有 EU 才取值
+    // 若有 EU 才取值
     if (it_eu != ExternalUt.end()) {
         eu = it_eu->second;
     }
 
-    // [Step 1] 計算 MDU (On-the-fly Calculation)
+    // 計算 MDU (On-the-fly Calculation)
     vector<double> VecSeqMDU(leafNode.L2_SeqInfo.size(), 0.0);
     double TotalMDU = 0;
 
@@ -920,22 +922,34 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
         for (int i = 0; i < (int)leafNode.L2_SeqInfo.size(); ++i) {
             auto &seq = leafNode.L2_SeqInfo[i];
             double seqMDU = 0;
+            double MaxseqMDU = 0;
             
             for (auto &inst : seq.L1_UtInfo) {
-                // Leaf Node 對應 VecIu 的最後一個
-                int curIu = inst.VecIu.back();
-                
-                // 只有大於 1 的部分算作有效 MDU (表層可扣量)
-                if (curIu > 1) {
-                    seqMDU += (curIu - 1) * eu;
+                double seqMDU = 0;
+                for (int k = 0; k < (int)inst.VecIu.size(); ++k) {
+                    // Leaf Node 對應 VecIu 的最後一個
+                    int curIu = inst.VecIu[k];
+                    //cout << "curIu " << curIu << endl;
+
+                    int currentItem = leafNode.VecPattern[k]; 
+                    double currentEu = ExternalUt[currentItem];
+                    
+                    // 只有大於 1 的部分算作有效 MDU (表層可扣量)
+                    if (curIu > 1) {
+                        seqMDU += (curIu - 1) * currentEu;
+                        //cout << seqMDU << endl;
+                    }
                 }
+                MaxseqMDU = max(MaxseqMDU, seqMDU);
             }
-            VecSeqMDU[i] = seqMDU;
-            TotalMDU += seqMDU;
+            VecSeqMDU[i] = MaxseqMDU;
+            //cout << "MDU: " << leafNode.pattern << ": " << MaxseqMDU << endl;
+            TotalMDU += MaxseqMDU;
         }
+        
     }
 
-    // [Step 2] 隱藏迴圈 (Round-based + Debt Transfer)
+    // 隱藏迴圈
     double curdiff = diff;      
     double Unpaidrut = 0;       // 累積債務
     int RoundCounter = 0;
@@ -953,6 +967,7 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
 
             auto &seq = leafNode.L2_SeqInfo[i];
             double KeepSeqUt = seq.SeqUt;
+            double KeepSumUt = leafNode.SumUt;
 
             // 跳過無效序列
             if (KeepSeqUt <= 0) continue;
@@ -961,18 +976,19 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
 
             if (TotalMDU > 0) {
                 // 策略 A: MDU 優先模式
-                // 依照剛剛算出來的 MDU 比例分配
                 AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
+                //cout << "MDU--> " << leafNode.pattern << ": " << AllocUt << endl;
             } else {
                 // 策略 B: Fallback 模式 (萬一表層全乾了 TotalMDU=0)
-                // 退回使用 SeqUt 分配，強迫進入 TraceBack 尋找深層機會
-                if (leafNode.SumUt > 0) {
-                    AllocUt = ceil(diff * (KeepSeqUt / leafNode.SumUt));
+                if (leafNode.SumUt > 0) {                    
+                    AllocUt = ceil(diff * (KeepSeqUt / KeepSumUt));
+                    //cout << "Utility--> " << leafNode.pattern << ": " << AllocUt << endl;
                 }
             }
 
             // 本次目標 = 分配額度 + 債務
             double TargetReduce = AllocUt + Unpaidrut;
+            
             if (TargetReduce <= 0) continue;
 
             double ActualReduced = 0;       
@@ -980,15 +996,15 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
 
             // --- [執行扣除] ---
             for (int j = 0; j < (int)seq.L1_UtInfo.size(); ++j)
-            {
+            {   
                 if (KeepReduceUt <= 0) break;
 
                 auto &inst = seq.L1_UtInfo[j];
-                double currentSeqUt = seq.SeqUt; // 確保拿到最新的
+                //double currentSeqUt = seq.SeqUt; // 確保拿到最新的
+                double curReduceUt = KeepReduceUt;
 
                 // 篡位檢查
-                if (inst.CaseUtility <= (currentSeqUt - KeepReduceUt))
-                    continue;
+                if (inst.CaseUtility <= (KeepSeqUt - KeepReduceUt)) continue;
 
                 int sid = seq.sid;
                 int idx1b = inst.VecIndex.back();
@@ -1029,24 +1045,24 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
                     applyDeltaAlongPath(PatternPath, i, idx1b, diffIu, usedDelta, sid);
 
                     localDropped += usedDelta;
-                    KeepReduceUt -= usedDelta;
+                    curReduceUt -= usedDelta;
                 }
 
                 // TraceBack
-                if (KeepReduceUt > 0)
+                if (curReduceUt > 0)
                 {
                     double remain = TraceBack(
                         PatternPath,
                         i,                       
                         seq.IdxOfLastLevelSeq,   
                         inst.IdxOfLastLevelIns,  
-                        KeepReduceUt,            
+                        curReduceUt,            
                         2,                       
                         idx1b                    
                     );
-                    double traceAmount = KeepReduceUt - remain; 
+                    double traceAmount = curReduceUt - remain; 
                     localDropped += traceAmount;
-                    KeepReduceUt = remain; 
+                    curReduceUt = remain; 
                 }
 
                 ActualReduced += localDropped;
@@ -1427,6 +1443,25 @@ void HUSP(L3_NodeInfo &NodeUC)
         }
         PatternPath.push_back(ref(NIF));
 
+        // 1. 畫線: Parent -> Child
+        // DOT 檔如果有特殊符號(如逗號)需要用引號包起來，所以我們印 pattern 時前後加 \"
+        GraphFile << "  \"" << NodeUC.pattern << "\" -> \"" << NIF.pattern << "\" [label=\"I-Ext\"];\n";
+
+        // 2. 如果這個節點觸發了 Hiding (做了 REIHUSP_hiding)
+        // 可以在這裡標記顏色，方便除錯
+        if (NIF.SumUt >= MinUtil) // 這邊是判斷要不要 Hiding 的條件
+        {
+             // 把它塗成紅色，並標示修改後的 SumUt
+             GraphFile << "  \"" << NIF.pattern << "\" [style=filled, fillcolor=\"#ffcccc\", label=\"" 
+                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
+        }
+        else
+        {
+             // 沒 Hiding 的普通節點
+             GraphFile << "  \"" << NIF.pattern << "\" [label=\"" 
+                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
+        }
+
         if (NIF.SumUt >= MinUtil)
         {
             I_ExtensionCounter++;
@@ -1660,6 +1695,18 @@ void HUSP(L3_NodeInfo &NodeUC)
         }
         PatternPath.push_back(ref(NIF));
 
+        GraphFile << "  \"" << NodeUC.pattern << "\" -> \"" << NIF.pattern << "\" [label=\"S-Ext\", style=dashed];\n";
+        if (NIF.SumUt >= MinUtil) 
+        {
+             GraphFile << "  \"" << NIF.pattern << "\" [style=filled, fillcolor=\"#ffcccc\", label=\"" 
+                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
+        }
+        else
+        {
+             GraphFile << "  \"" << NIF.pattern << "\" [label=\"" 
+                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
+        }
+
         if (NIF.SumUt >= MinUtil)
         {
             S_ExtensionCounter++;
@@ -1745,13 +1792,11 @@ int main()
     ExternalUt.insert(make_pair(0, 0));
     cout << endl;
 
-    str_EuFile = "simple_utb.txt";
-    str_DBFile = "simple_db.txt";
-
-    /*
-    str_EuFile = "jzwpaper_utb.txt";
-    str_DBFile = "jzwpaper_db.txt";
-    */
+    str_EuFile = "simple2_utb.txt";
+    str_DBFile = "simple2_db.txt";
+    
+    //str_EuFile = "jzwpaper_utb.txt";
+    //str_DBFile = "jzwpaper_db.txt";
     
     //str_EuFile = "05.foodmart_ExternalUtility.txt";
     //str_DBFile = "05.foodmart.txt";
@@ -1760,12 +1805,19 @@ int main()
     //str_EuFile = "4_sign_ExternalUtility.txt";
     //str_DBFile = "4_sign.txt";
     
-    MinUtil = 584;
+    MinUtil = 154;
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
     // cout << "******** Hiding HUSP process ********" << endl;
     // cout << "Start Reading External Utility..." << endl;
+
+    //1. 開啟檔案並寫入 Header
+    GraphFile.open("HidingTree.dot");
+    GraphFile << "digraph HUSP_Tree {\n";
+    GraphFile << "  node [shape=box, fontname=\"Arial\"];\n"; // 設定節點樣式
+    GraphFile << "  rankdir=LR;\n"; // 讓樹往右長 (Left to Right)，比較好讀長序列
+    
     Read_ExternalUt(str_EuFile);
     // cout << "Start Reading Database..." << endl;
     Read_Database(str_DBFile);
@@ -1785,15 +1837,20 @@ int main()
 
     double time = 0;
     clock_t start, end;
+
+    //2. 建立 Root 節點
+    GraphFile << "  \"ROOT\" [label=\"ROOT\", shape=ellipse];\n";
+    
     start = clock();
     // Node_SingleItem.size()
     for (int i = 1; i < Node_SingleItem.size(); i++)
     {
         // Cout_HUSPL3(Node_SingleItem[i]);
         //   cout << "Start Update SingleItem info " << Node_SingleItem[i].pattern << " ..." << endl;
-        cout << Node_SingleItem[i].SumUt <<"-->" << i << "-->" ;
+        //cout << Node_SingleItem[i].SumUt <<"-->" << i << "-->" ;
         UpdateSingleItem(Node_SingleItem, stoi(Node_SingleItem[i].pattern)); // 重讀一次Single Itme在DB的資訊(因為被其他Node改到)
-        cout << Node_SingleItem[i].SumUt << endl;
+        GraphFile << "  \"ROOT\" -> \"" << Node_SingleItem[i].pattern << "\";\n"; //畫線
+
         if (Node_SingleItem[i].SumUt >= MinUtil)
         {
             Single_ItemCounter++;
@@ -1801,6 +1858,7 @@ int main()
             SingleItem_Hiding(Node_SingleItem, i); // Update()後的SingleItem依然大於門檻
             // SumDiff += (MinUtil - Node_SingleItem[i].SumUt);
         }
+        //cout << Node_SingleItem[i].SumUt << endl;
         PatternPath.push_back(ref(Node_SingleItem[i]));
         // cout << "Start HUSP of " << Node_SingleItem[i].pattern << " ..." << endl;
         HUSP(Node_SingleItem[i]);
@@ -1835,6 +1893,11 @@ int main()
 
     cout << "Time consumption:" << time << "s" << endl;
     cout << endl;
+
+    // 4. 寫入結尾括號並關檔
+    GraphFile << "}"; 
+    GraphFile.close();
+    cout << "Graphviz file 'HidingTree.dot' generated!" << endl;
 
     cout << "Start Write out sanitized dataset ..." << endl;
     DBWriteBack(VecDataBase);
