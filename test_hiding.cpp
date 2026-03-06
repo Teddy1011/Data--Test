@@ -448,10 +448,12 @@ void applyDeltaOnDB(int sid, int idx1b, int diffIu) //更新VecDataBase資料
     double deltaU = diffIu * eu;
 
     db.UtilityArray[idx0] -= deltaU;
+    db.UtilityArray[idx0] = cleanUtil(db.UtilityArray[idx0]);
 
     for (int k = 0; k < idx0; ++k)
     {
         db.RuArray[k] -= deltaU;
+        db.RuArray[k] = cleanUtil(db.RuArray[k]);
     }
 }
 
@@ -1121,12 +1123,13 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
     // [Step 1] 即時計算 MDU
     vector<double> VecSeqMDU(Node_SingleItem[IdxItem].L2_SeqInfo.size(), 0.0);
     double TotalMDU = 0;
-    double MaxseqMDU = 0;
     
     for (int i = 0; i < (int)Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++) {
         auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
-        double seqMDU = 0;
+        double MaxseqMDU = 0;
+        
         for(auto &inst : seq.L1_UtInfo) {
+            double seqMDU = 0;
             // 直讀 VecIu[0]
             if(inst.VecIu[0] > 1) {
                 seqMDU += (inst.VecIu[0] - 1) * eu;
@@ -1134,7 +1137,6 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
             MaxseqMDU = max(MaxseqMDU, seqMDU);
         }
         VecSeqMDU[i] = MaxseqMDU;
-
         TotalMDU += MaxseqMDU;
     }
 
