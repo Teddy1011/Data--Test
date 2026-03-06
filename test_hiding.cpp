@@ -14,9 +14,9 @@
 #include <psapi.h>
 #include <iostream>
 #include <memory> // for unique_ptr
+#include <algorithm>
 
 using namespace std;
-ofstream GraphFile; //畫圖
 /*
 - 投影點夠扣、不夠扣設為1、Node和DB資料一致完成
 - 當一次做a、b時，因為a的Node可能被b修改，因此Node a的資訊未必是最新的(但能保證不超過門檻)
@@ -36,7 +36,7 @@ ofstream GraphFile; //畫圖
 解決:若仍有Utility應減去而未減，把未減的值傳遞到下一筆序列，若整輪跑完還有未減完的，最多跑到第二輪。
 */
 /* (2026.01.13)
-為了減少序列隱藏失敗的次數，新增一個最大可扣:Pattern的所有iu扣到剩1後，還有多少Utility可以扣。
+為了減少序列隱藏失敗的次數，新增一個最大可扣(MDU):Pattern的所有iu扣到剩1後，還有多少Utility可以扣。
 利用這個最大可扣去算rut，可以使有Utility，可扣值已經極低甚至是0的序列降低rut的值。
 也可以讓Utility更大的去承擔更多的rut去扣。
  */
@@ -98,7 +98,7 @@ map<int, double> ExternalUt;
 string str_EuFile = "";
 string str_DBFile = "";
 
-vector<L3_NodeInfo> PatternPath;
+vector<reference_wrapper<L3_NodeInfo>> PatternPath;
 
 // vector<int> PPvalid;
 // vector<L3_NodeInfo *> pp;
@@ -111,6 +111,11 @@ double SumSWU = 0;
 double MinUtil = 0;
 double memoryMB = 0;
 double SumDiff = 0;
+
+inline double cleanUtil(double val) {
+    if (abs(val) < 1e-6) return 0.0;
+    return std::round(val * 10000.0) / 10000.0;
+}
 
 void Cout_2DVec(vector<vector<int>> vector2D)
 {
@@ -370,7 +375,7 @@ void BulidSingleItems(vector<SeqData> VecDataBase)
                     // SeqPEU
                     Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo[Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo.size() - 1].SeqPEU = VecDataBase[i].UtilityArray[j] + VecDataBase[i].RuArray[j];
                     Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].SumPEU += VecDataBase[i].UtilityArray[j] + VecDataBase[i].RuArray[j];
-                    Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo[Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[i].IndexArray[j];
+                    //Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo[Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[i].IndexArray[j];
                 }
                 // 沒用到
                 if (L1_ut.CaseUtility > MinUtil)
@@ -401,7 +406,7 @@ void BulidSingleItems(vector<SeqData> VecDataBase)
                     Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo[Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo.size() - 1].SeqPEU = VecDataBase[i].UtilityArray[j] + VecDataBase[i].RuArray[j];
 
                     // 沒用到
-                    Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo[Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[i].IndexArray[j];
+                    //Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo[Node_SingleItem[IdxNodeSingleItem[VecDataBase[i].ItemArray[j]]].L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[i].IndexArray[j];
                 }
 
                 // SeqUt、SumUt
@@ -451,7 +456,7 @@ void applyDeltaOnDB(int sid, int idx1b, int diffIu) //更新VecDataBase資料
 }
 
 void applyDeltaAlongPath( //沿PatternPath更新資料
-    vector<L3_NodeInfo> &PatternPath,
+    vector<reference_wrapper<L3_NodeInfo>> &PatternPath,
     int topSeqIdx,
     int idx1b,
     int diffIu,
@@ -465,7 +470,8 @@ void applyDeltaAlongPath( //沿PatternPath更新資料
     // 從 leaf 一路往上
     for (int pi = (int)PatternPath.size() - 1; pi >= 0; --pi)
     {
-        auto &node = PatternPath[pi];
+        //auto &node = PatternPath[pi];
+        auto &node = PatternPath[pi].get();
         auto &seq  = node.L2_SeqInfo[curSeqIdx];
 
         // 找出這個 idx1b 在該 pattern 序列中對應到哪些
@@ -481,11 +487,14 @@ void applyDeltaAlongPath( //沿PatternPath更新資料
 
                 // VecUtility
                 inst.VecUtility[pp] -= usedDelta;
+                inst.VecUtility[pp] = cleanUtil(inst.VecUtility[pp]);
+
                 // Iu（最多扣到 1）
                 inst.VecIu[pp] -= diffIu;
                 if (inst.VecIu[pp] < 1) inst.VecIu[pp] = 1;
                 // CaseUtility
                 inst.CaseUtility -= usedDelta;
+                inst.CaseUtility = cleanUtil(inst.CaseUtility);
             }
         }
 
@@ -496,7 +505,7 @@ void applyDeltaAlongPath( //沿PatternPath更新資料
         seq.SeqUt      = 0;
         seq.SeqPEU     = 0;
         seq.SeqUtCase  = -1;
-        seq.SeqPEUCase = -1;
+        //seq.SeqPEUCase = -1;
 
         for (int x = 0; x < (int)seq.L1_UtInfo.size(); ++x)
         {
@@ -524,7 +533,7 @@ void applyDeltaAlongPath( //沿PatternPath更新資料
                     node.SumPEU  -= seq.SeqPEU;
                     node.SumPEU  += candPEU;
                     seq.SeqPEU    = candPEU;
-                    seq.SeqPEUCase = idx1b_x;
+                    //seq.SeqPEUCase = idx1b_x;
                 }
             }
         }
@@ -568,7 +577,7 @@ void UpdateSingleItem(vector<L3_NodeInfo> &Node_SingleItem, int Item)
                     Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEU = Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].CaseUtility + VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].RuArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1];
                     Node_SingleItem[IdxItem].SumPEU += Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEU;
 
-                    Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEUCase = VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].IndexArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1];
+                    //Node_SingleItem[IdxItem].L2_SeqInfo[i].SeqPEUCase = VecDataBase[Node_SingleItem[IdxItem].L2_SeqInfo[i].sid].IndexArray[Node_SingleItem[IdxItem].L2_SeqInfo[i].L1_UtInfo[j].VecIndex[0] - 1];
                 }
             }
             else
@@ -593,8 +602,8 @@ void Cout_HUSPL3(L3_NodeInfo L3_node)
         cout << "Seq " << L3_node.L2_SeqInfo[j].sid << endl;
         cout << "SeqUt:" << L3_node.L2_SeqInfo[j].SeqUt << endl;
         cout << "SeqPEU:" << L3_node.L2_SeqInfo[j].SeqPEU << endl;
-        cout << "SeqUtCase:" << L3_node.L2_SeqInfo[j].SeqUtCase << endl;
-        cout << "SeqPEUCase:" << L3_node.L2_SeqInfo[j].SeqPEUCase << endl;
+        //cout << "SeqUtCase:" << L3_node.L2_SeqInfo[j].SeqUtCase << endl;
+        //cout << "SeqPEUCase:" << L3_node.L2_SeqInfo[j].SeqPEUCase << endl;
         cout << "IdxOfLastLevelSeq:" << L3_node.L2_SeqInfo[j].IdxOfLastLevelSeq << endl;
         cout << "|Idx Iu Ut|InstanceUt" << endl;
         // cout << "Over Minutil:" << L3_node.L2_SeqInfo[j].OverMinUtilCase << endl;
@@ -711,6 +720,7 @@ void DeleteLowRSUFromlist(L3_NodeInfo NodeUC, set<int> &ilist, set<int> &slist)
     map<int, double> I_RSUmap; //<Item,RSU>
     for (int i = 0; i < NodeUC.L2_SeqInfo.size(); i++)
     {
+        int sid = NodeUC.L2_SeqInfo[i].sid;
         // slist
         // cout << NodeUC.L2_SeqInfo[i].L1_UtInfo[0].VecIndex.back() << endl;
         // 最後一個Tid的Item不往後掃
@@ -734,9 +744,10 @@ void DeleteLowRSUFromlist(L3_NodeInfo NodeUC, set<int> &ilist, set<int> &slist)
         {
             // cout << NodeUC.L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() << endl;
             // cout << VecDataBase[NodeUC.L2_SeqInfo[i].sid].TidArray[NodeUC.L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1] << endl;
-            // cout << "seq " << NodeUC.L2_SeqInfo[i].sid << endl;
-            for (int k = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[NodeUC.L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back()] - 1; k < VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray.size(); k++)
-            {
+                // cout << "seq " << NodeUC.L2_SeqInfo[i].sid << endl;
+            int cur_idx = NodeUC.L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back(); 
+            for (int k = cur_idx; k < VecDataBase[sid].IndexArray.size(); k++)
+                {
                 if (VecDataBase[NodeUC.L2_SeqInfo[i].sid].TidArray[NodeUC.L2_SeqInfo[i].L1_UtInfo[j].VecIndex.back() - 1] != VecDataBase[NodeUC.L2_SeqInfo[i].sid].TidArray[k])
                 {
                     break;
@@ -762,7 +773,7 @@ void DeleteLowRSUFromlist(L3_NodeInfo NodeUC, set<int> &ilist, set<int> &slist)
 }
 
 // 回傳：這一層處理完後，還有多少 Ut 沒扣完（>=0）
-double TraceBack(vector<L3_NodeInfo> &PatternPath,
+double TraceBack(vector<reference_wrapper<L3_NodeInfo>> &PatternPath,
                  int TopNodeSeqIdx,   // 在 leafNode 裡這個 sid 的序列 index
                  int LastSeqIdx,      // 目前這一層 pattern 的 Seq index
                  int LastInsIdx,      // 目前這一層 pattern 的 Instance index
@@ -780,14 +791,15 @@ double TraceBack(vector<L3_NodeInfo> &PatternPath,
     bool fromSExt = false;
     if (curIdx + 1 < (int)PatternPath.size())
     {
-        if (PatternPath[curIdx + 1].ExtensionType == 1)
+        if (PatternPath[curIdx + 1].get().ExtensionType == 1)
             fromSExt = true;
     }
 
-    auto &node = PatternPath[curIdx];
+    //auto &node = PatternPath[curIdx];
+    auto &node = PatternPath[curIdx].get();
     auto &seq  = node.L2_SeqInfo[LastSeqIdx];
     auto &inst = seq.L1_UtInfo[LastInsIdx];
-
+    //cout << node.pattern << ", S" << seq.sid << ", index" << inst.VecIndex.back() << endl;
     double KeepSeqUt = seq.SeqUt;
     double KeepInsUt = inst.CaseUtility;
 
@@ -862,7 +874,7 @@ double TraceBack(vector<L3_NodeInfo> &PatternPath,
     double needU   = KeepReduceUt;
     double usedDelta = min(needU, maxDeltaU);
 
-    int diffIu = (int)ceil(usedDelta / eu);
+    int diffIu = (int)ceil(cleanUtil(usedDelta / eu));
     if (diffIu > maxDiffIu) diffIu = maxDiffIu;
     usedDelta = diffIu * eu; // 實際扣掉的 Ut
 
@@ -892,11 +904,13 @@ double TraceBack(vector<L3_NodeInfo> &PatternPath,
 }
 
 // 有動到VecPattern的第一個item(也就是root)才要更新該single node
-void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
+void REIHUSP_hiding(vector<reference_wrapper<L3_NodeInfo>> &PatternPath)
 {
+    //Cout_HUSPL3(PatternPath.back());
     if (PatternPath.empty()) return;
 
-    L3_NodeInfo &leafNode = PatternPath.back();
+    //L3_NodeInfo &leafNode = PatternPath.back();
+    L3_NodeInfo &leafNode = PatternPath.back().get();
 
     // 1. 計算目標 Diff
     double diff = leafNode.SumUt - MinUtil + 1;
@@ -948,14 +962,14 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
         }
         
     }
-
+        
     // 隱藏迴圈
     double curdiff = diff;      
     double Unpaidrut = 0;       // 累積債務
     int RoundCounter = 0;
     int MaxRound = 2;           // 二輪機制：確保最後累積的債務能回頭找人消化
 
-    while (curdiff > 0 && RoundCounter < MaxRound)
+    while (TotalMDU > 0 && curdiff > 0 && RoundCounter < MaxRound)
     {
         RoundCounter++;
         double RutInThisRound = 0; 
@@ -975,16 +989,15 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
             double AllocUt = 0;
 
             if (TotalMDU > 0) {
-                // 策略 A: MDU 優先模式
+                // 策略 A: MDU 優先
                 AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
                 //cout << "MDU--> " << leafNode.pattern << ": " << AllocUt << endl;
-            } else {
-                // 策略 B: Fallback 模式 (萬一表層全乾了 TotalMDU=0)
+            } /*else {
+            // 策略 B: Fallback 模式 (萬一表層全乾了 TotalMDU=0)
                 if (leafNode.SumUt > 0) {                    
-                    AllocUt = ceil(diff * (KeepSeqUt / KeepSumUt));
-                    //cout << "Utility--> " << leafNode.pattern << ": " << AllocUt << endl;
+                AllocUt = ceil(diff * (KeepSeqUt / KeepSumUt));
                 }
-            }
+            }*/
 
             // 本次目標 = 分配額度 + 債務
             double TargetReduce = AllocUt + Unpaidrut;
@@ -996,7 +1009,7 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
 
             // --- [執行扣除] ---
             for (int j = 0; j < (int)seq.L1_UtInfo.size(); ++j)
-            {   
+            {
                 if (KeepReduceUt <= 0) break;
 
                 auto &inst = seq.L1_UtInfo[j];
@@ -1025,20 +1038,22 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
                     double usedDelta = min(needU, maxDeltaU);
 
                     // 轉為整數
-                    int diffIu = (int)ceil(usedDelta / eu);
+                    int diffIu = (int)ceil(cleanUtil(usedDelta / eu));
                     if (diffIu > maxDiffIu) diffIu = maxDiffIu;
                     usedDelta = diffIu * eu;
                     int newIu = curIu - diffIu;
 
                     // Update Data (Structure + DB + Pattern)
-                    inst.VecIu.back() = newIu;
+                    /*inst.VecIu.back() = newIu;
                     inst.VecUtility.back() -= usedDelta;
+                    inst.VecUtility.back() = cleanUtil(inst.VecUtility.back());
                     inst.CaseUtility -= usedDelta;
+                    inst.CaseUtility = cleanUtil(inst.CaseUtility);
 
                     if (idx1b == seq.SeqUtCase) {
                         seq.SeqUt -= usedDelta;
                         // leafNode.SumUt 稍後更新
-                    }
+                    }*/
 
                     VecDataBase[sid].IuArray[idx0] = newIu;
                     applyDeltaOnDB(sid, idx1b, diffIu);
@@ -1051,6 +1066,7 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
                 // TraceBack
                 if (curReduceUt > 0)
                 {
+                    //cout << leafNode.pattern << ", S" << seq.sid << ": IdxOfLastLevelSeq-->" << seq.IdxOfLastLevelSeq << ", IdxOfLastLevelIns-->" << inst.IdxOfLastLevelIns << endl;
                     double remain = TraceBack(
                         PatternPath,
                         i,                       
@@ -1086,6 +1102,7 @@ void REIHUSP_hiding(vector<L3_NodeInfo> &PatternPath)
         if (RutInThisRound == 0 && curdiff > 0) break;
 
     } // end while
+    
 }
 
 void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
@@ -1104,6 +1121,7 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
     // [Step 1] 即時計算 MDU
     vector<double> VecSeqMDU(Node_SingleItem[IdxItem].L2_SeqInfo.size(), 0.0);
     double TotalMDU = 0;
+    double MaxseqMDU = 0;
     
     for (int i = 0; i < (int)Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++) {
         auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
@@ -1113,9 +1131,11 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
             if(inst.VecIu[0] > 1) {
                 seqMDU += (inst.VecIu[0] - 1) * eu;
             }
+            MaxseqMDU = max(MaxseqMDU, seqMDU);
         }
-        VecSeqMDU[i] = seqMDU;
-        TotalMDU += seqMDU;
+        VecSeqMDU[i] = MaxseqMDU;
+
+        TotalMDU += MaxseqMDU;
     }
 
     // [Step 2] 隱藏迴圈
@@ -1142,11 +1162,11 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
             double AllocUt = 0;
             if (TotalMDU > 0) {
                  AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
-            } else {
+            } /*else {
                  // Fallback
                  if (Node_SingleItem[IdxItem].SumUt > 0)
                     AllocUt = ceil(diff * (KeepSeqUt / Node_SingleItem[IdxItem].SumUt));
-            }
+            }*/
             
             double TargetReduce = AllocUt + Unpaidrut;
             if (TargetReduce <= 0) continue;
@@ -1179,24 +1199,26 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
                     double needU = KeepReduceUt;
                     double usedDelta = min(needU, maxDeltaU);
                     
-                    int diffIu = (int)ceil(usedDelta / eu);
+                    int diffIu = (int)ceil(cleanUtil(usedDelta / eu));
                     if (diffIu > maxDiffIu) diffIu = maxDiffIu;
                     usedDelta = diffIu * eu;
                     int newIu = curIu - diffIu;
                     
                     // Update
                     inst.VecUtility[0] -= usedDelta;
+                    inst.VecUtility[0] = cleanUtil(inst.VecUtility[0]);
                     inst.VecIu[0] = newIu;
                     inst.CaseUtility -= usedDelta;
+                    inst.CaseUtility = cleanUtil(inst.CaseUtility);
                     
-                    if (idx1b == seq.SeqUtCase) {
+                    /*if (idx1b == seq.SeqUtCase) {
                         seq.SeqUt -= usedDelta;
                         Node_SingleItem[IdxItem].SumUt -= usedDelta;
                     }
                     if (idx1b == seq.SeqPEUCase) {
                         seq.SeqPEU -= usedDelta;
                         Node_SingleItem[IdxItem].SumPEU -= usedDelta;
-                    }
+                    }*/
                     
                     VecDataBase[sid].IuArray[idx0] = newIu;
                     applyDeltaOnDB(sid, idx1b, diffIu);
@@ -1298,7 +1320,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                             {
                                 NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU = UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1];
                                 NIF.SumPEU += NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU;
-                                NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
+                                //NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
                             }
                             else
                             {
@@ -1360,7 +1382,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumPEU += ((UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1]) - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU = UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1];
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
+                                    //NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
                                 }
 
                                 // Record Cases of Over MinUtil.
@@ -1400,7 +1422,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumPEU += ((UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1]) - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU = UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1];
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
+                                    //NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
                                 }
                                 UIF.CaseUtility = 0;
                             }
@@ -1431,36 +1453,22 @@ void HUSP(L3_NodeInfo &NodeUC)
         else
         {
             while (!PatternPath.empty() &&
-                   NIF.VecPattern.size() <= PatternPath.back().VecPattern.size())
+                   NIF.VecPattern.size() <= PatternPath.back().get().VecPattern.size())
             {
                 PatternPath.pop_back();
             }
             if (PatternPath.empty() ||
-                NodeUC.VecPattern.size() > PatternPath.back().VecPattern.size())
+                NodeUC.VecPattern.size() > PatternPath.back().get().VecPattern.size())
             {
                 PatternPath.push_back(ref(NodeUC));
             }
         }
         PatternPath.push_back(ref(NIF));
 
-        // 1. 畫線: Parent -> Child
-        // DOT 檔如果有特殊符號(如逗號)需要用引號包起來，所以我們印 pattern 時前後加 \"
-        GraphFile << "  \"" << NodeUC.pattern << "\" -> \"" << NIF.pattern << "\" [label=\"I-Ext\"];\n";
-
-        // 2. 如果這個節點觸發了 Hiding (做了 REIHUSP_hiding)
-        // 可以在這裡標記顏色，方便除錯
-        if (NIF.SumUt >= MinUtil) // 這邊是判斷要不要 Hiding 的條件
-        {
-             // 把它塗成紅色，並標示修改後的 SumUt
-             GraphFile << "  \"" << NIF.pattern << "\" [style=filled, fillcolor=\"#ffcccc\", label=\"" 
-                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
-        }
-        else
-        {
-             // 沒 Hiding 的普通節點
-             GraphFile << "  \"" << NIF.pattern << "\" [label=\"" 
-                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
-        }
+        /*if(NIF.SumUt == 544||639){
+            cout << NIF.pattern << "-->" << NIF.SumUt << endl;
+            Cout_VecDB(VecDataBase);
+        }*/
 
         if (NIF.SumUt >= MinUtil)
         {
@@ -1476,6 +1484,8 @@ void HUSP(L3_NodeInfo &NodeUC)
         }
 
         HUSP(NIF);
+
+        PatternPath.pop_back();
     }
 
     // S-Extension
@@ -1550,7 +1560,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                             {
                                 NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU = UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1];
                                 NIF.SumPEU += NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU;
-                                NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
+                                //NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
                             }
                             else
                             {
@@ -1612,7 +1622,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumPEU += ((UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1]) - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU = UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1];
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
+                                    //NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
                                 }
 
                                 // Record Cases of Over MinUtil.
@@ -1648,7 +1658,7 @@ void HUSP(L3_NodeInfo &NodeUC)
                                 {
                                     NIF.SumPEU += ((UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1]) - NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU);
                                     NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEU = UIF.CaseUtility + VecDataBase[NodeUC.L2_SeqInfo[i].sid].RuArray[ItemIdx - 1];
-                                    NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
+                                    //NIF.L2_SeqInfo[NIF.L2_SeqInfo.size() - 1].SeqPEUCase = VecDataBase[NodeUC.L2_SeqInfo[i].sid].IndexArray[ItemIdx - 1];
                                 }
                             }
                             UIF.CaseUtility = 0;
@@ -1683,29 +1693,17 @@ void HUSP(L3_NodeInfo &NodeUC)
         else
         {
             while (!PatternPath.empty() &&
-                   NIF.VecPattern.size() <= PatternPath.back().VecPattern.size())
+                   NIF.VecPattern.size() <= PatternPath.back().get().VecPattern.size())
             {
                 PatternPath.pop_back();
             }
             if (PatternPath.empty() ||
-                NodeUC.VecPattern.size() > PatternPath.back().VecPattern.size())
+                NodeUC.VecPattern.size() > PatternPath.back().get().VecPattern.size())
             {
                 PatternPath.push_back(ref(NodeUC));
             }
         }
         PatternPath.push_back(ref(NIF));
-
-        GraphFile << "  \"" << NodeUC.pattern << "\" -> \"" << NIF.pattern << "\" [label=\"S-Ext\", style=dashed];\n";
-        if (NIF.SumUt >= MinUtil) 
-        {
-             GraphFile << "  \"" << NIF.pattern << "\" [style=filled, fillcolor=\"#ffcccc\", label=\"" 
-                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
-        }
-        else
-        {
-             GraphFile << "  \"" << NIF.pattern << "\" [label=\"" 
-                       << NIF.pattern << "\\nUt:" << NIF.SumUt << "\"];\n";
-        }
 
         if (NIF.SumUt >= MinUtil)
         {
@@ -1720,6 +1718,8 @@ void HUSP(L3_NodeInfo &NodeUC)
             //Cout_HUSPL3(NIF);
         }
         HUSP(NIF);
+
+        PatternPath.pop_back();
     }
 }
 
@@ -1792,32 +1792,27 @@ int main()
     ExternalUt.insert(make_pair(0, 0));
     cout << endl;
 
-    str_EuFile = "simple2_utb.txt";
-    str_DBFile = "simple2_db.txt";
+    //str_EuFile = "simple_utb.txt";
+    //str_DBFile = "simple_db.txt";
+
     
     //str_EuFile = "jzwpaper_utb.txt";
     //str_DBFile = "jzwpaper_db.txt";
     
-    //str_EuFile = "05.foodmart_ExternalUtility.txt";
-    //str_DBFile = "05.foodmart.txt";
+    
+    str_EuFile = "05.foodmart_ExternalUtility.txt";
+    str_DBFile = "05.foodmart.txt";
     
     
     //str_EuFile = "4_sign_ExternalUtility.txt";
     //str_DBFile = "4_sign.txt";
     
-    MinUtil = 154;
+    MinUtil = 2000;
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
     // cout << "******** Hiding HUSP process ********" << endl;
     // cout << "Start Reading External Utility..." << endl;
-
-    //1. 開啟檔案並寫入 Header
-    GraphFile.open("HidingTree.dot");
-    GraphFile << "digraph HUSP_Tree {\n";
-    GraphFile << "  node [shape=box, fontname=\"Arial\"];\n"; // 設定節點樣式
-    GraphFile << "  rankdir=LR;\n"; // 讓樹往右長 (Left to Right)，比較好讀長序列
-    
     Read_ExternalUt(str_EuFile);
     // cout << "Start Reading Database..." << endl;
     Read_Database(str_DBFile);
@@ -1837,20 +1832,16 @@ int main()
 
     double time = 0;
     clock_t start, end;
-
-    //2. 建立 Root 節點
-    GraphFile << "  \"ROOT\" [label=\"ROOT\", shape=ellipse];\n";
-    
     start = clock();
     // Node_SingleItem.size()
+    //Cout_VecDB(VecDataBase);
     for (int i = 1; i < Node_SingleItem.size(); i++)
     {
-        // Cout_HUSPL3(Node_SingleItem[i]);
+        
         //   cout << "Start Update SingleItem info " << Node_SingleItem[i].pattern << " ..." << endl;
         //cout << Node_SingleItem[i].SumUt <<"-->" << i << "-->" ;
         UpdateSingleItem(Node_SingleItem, stoi(Node_SingleItem[i].pattern)); // 重讀一次Single Itme在DB的資訊(因為被其他Node改到)
-        GraphFile << "  \"ROOT\" -> \"" << Node_SingleItem[i].pattern << "\";\n"; //畫線
-
+        //Cout_HUSPL3(Node_SingleItem[i]);
         if (Node_SingleItem[i].SumUt >= MinUtil)
         {
             Single_ItemCounter++;
@@ -1859,6 +1850,7 @@ int main()
             // SumDiff += (MinUtil - Node_SingleItem[i].SumUt);
         }
         //cout << Node_SingleItem[i].SumUt << endl;
+        
         PatternPath.push_back(ref(Node_SingleItem[i]));
         // cout << "Start HUSP of " << Node_SingleItem[i].pattern << " ..." << endl;
         HUSP(Node_SingleItem[i]);
@@ -1893,11 +1885,6 @@ int main()
 
     cout << "Time consumption:" << time << "s" << endl;
     cout << endl;
-
-    // 4. 寫入結尾括號並關檔
-    GraphFile << "}"; 
-    GraphFile.close();
-    cout << "Graphviz file 'HidingTree.dot' generated!" << endl;
 
     cout << "Start Write out sanitized dataset ..." << endl;
     DBWriteBack(VecDataBase);
