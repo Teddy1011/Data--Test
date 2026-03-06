@@ -58,9 +58,9 @@ vector<SeqData> VecDataBase;
 class L1_UtilityInfo
 {
 public:
-    int VecIndex;      // 改成int
-    int VecIu;         // 改成int
-    double VecUtility; // 改成double
+    int VecIndex;      // 原vector<int>
+    int VecIu;         // 原vector<int>
+    double VecUtility; // 原vector<double>
     double CaseUtility = 0;
     int IdxOfLastLevelIns = 0;
 };
@@ -341,10 +341,12 @@ void applyDeltaOnDB(int sid, int idx1b, int diffIu)
     double deltaU = diffIu * eu;
 
     db.UtilityArray[idx0] -= deltaU;
+    db.UtilityArray[idx0] = cleanUtil(db.UtilityArray[idx0]);
 
     for (int k = 0; k < idx0; ++k)
     {
         db.RuArray[k] -= deltaU;
+        db.RuArray[k] = cleanUtil(db.RuArray[k]);
     }
 }
 
@@ -579,7 +581,7 @@ void DeleteLowRSUFromlist(L3_NodeInfo &NodeUC, set<int> &ilist, set<int> &slist)
             for (int j = next_tid_start_idx - 1; j < VecDataBase[sid].IndexArray.size(); j++)
             {
                 S_RSUmap[VecDataBase[sid].ItemArray[j]] += NodeUC.L2_SeqInfo[i].SeqPEU;
-                if (S_RSUmap[VecDataBase[sid].ItemArray[j]] >= MinUtil) // 🌟 乾淨的判斷
+                if (S_RSUmap[VecDataBase[sid].ItemArray[j]] >= MinUtil) 
                 {
                     slist.insert(VecDataBase[sid].ItemArray[j]);
                 }
@@ -591,14 +593,13 @@ void DeleteLowRSUFromlist(L3_NodeInfo &NodeUC, set<int> &ilist, set<int> &slist)
         {
             int cur_idx = NodeUC.L2_SeqInfo[i].L1_UtInfo[j].VecIndex;
 
-            // 💡 迴圈直接從 cur_idx 開始，完美避開 IndexArray 越界問題
             for (int k = cur_idx; k < VecDataBase[sid].IndexArray.size(); k++)
             {
                 if (VecDataBase[sid].TidArray[cur_idx - 1] != VecDataBase[sid].TidArray[k])
                     break;
 
                 I_RSUmap[VecDataBase[sid].ItemArray[k]] += NodeUC.L2_SeqInfo[i].SeqPEU;
-                if (I_RSUmap[VecDataBase[sid].ItemArray[k]] >= MinUtil) // 🌟 乾淨的判斷
+                if (I_RSUmap[VecDataBase[sid].ItemArray[k]] >= MinUtil) 
                 {
                     ilist.insert(VecDataBase[sid].ItemArray[k]);
                 }
@@ -654,9 +655,10 @@ double TraceBack(vector<reference_wrapper<L3_NodeInfo>> &PatternPath,
         }
         return KeepReduceUt;
     }
-
+    //cout << seq.sid << ": " << inst.VecIndex <<"InsUt: " << KeepInsUt << "-->SeqUt: " << KeepSeqUt << "-->CurRut: " << KeepReduceUt << endl;
     if (KeepInsUt <= (KeepSeqUt - KeepReduceUt))
     {
+        //cout << seq.sid << ": " << inst.VecIndex << "--> Ut <= SeqUt - rut" << endl;
         if (PathIdx + 1 <= (int)PatternPath.size())
         {
             int nextSeqIdx = seq.IdxOfLastLevelSeq;
@@ -697,6 +699,7 @@ double TraceBack(vector<reference_wrapper<L3_NodeInfo>> &PatternPath,
         }
         return KeepReduceUt;
     }
+    
 
     int maxDiffIu = oldIu - 1;
     double maxDeltaU = maxDiffIu * eu;
@@ -709,6 +712,8 @@ double TraceBack(vector<reference_wrapper<L3_NodeInfo>> &PatternPath,
         diffIu = maxDiffIu;
     usedDelta = diffIu * eu;
 
+    //cout << seq.sid << ": " << inst.VecIndex << "--> currut: "<< usedDelta <<endl;
+
     int newIu = oldIu - diffIu;
     VecDataBase[sid].IuArray[idx0] = newIu;
 
@@ -718,7 +723,6 @@ double TraceBack(vector<reference_wrapper<L3_NodeInfo>> &PatternPath,
     KeepReduceUt -= usedDelta;
     if (KeepReduceUt <= 0)
         return 0;
-
     if (PathIdx + 1 <= (int)PatternPath.size())
     {
         int nextSeqIdx = seq.IdxOfLastLevelSeq;
@@ -758,6 +762,7 @@ void REIHUSP_hiding(vector<reference_wrapper<L3_NodeInfo>> &PatternPath)
         for (int i = 0; i < (int)leafNode.L2_SeqInfo.size(); ++i)
         {
             auto &seq = leafNode.L2_SeqInfo[i];
+            double seqMDU = 0;
             double MaxseqMDU = 0;
             for (int j = 0; j < (int)seq.L1_UtInfo.size(); ++j)
             {
@@ -934,11 +939,12 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
 
     for (int i = 0; i < (int)Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++)
     {
-        double MaxseqMDU = 0;
         auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
-        double seqMDU = 0;
+        double MaxseqMDU = 0;
+        
         for (auto &inst : seq.L1_UtInfo)
         {
+            double seqMDU = 0;
             if (inst.VecIu > 1)
             {
                 seqMDU += (inst.VecIu - 1) * eu;
@@ -1207,9 +1213,9 @@ void HUSP(L3_NodeInfo &NodeUC)
 
         PatternPath.push_back(ref(NIF));
 
-        if(NIF.SumUt == 198){
+        /*if(NIF.SumUt == 160){
             Cout_HUSPL3(NIF);
-        }
+        }*/
 
         if (NIF.SumUt >= MinUtil)
         {
@@ -1373,9 +1379,9 @@ void HUSP(L3_NodeInfo &NodeUC)
         }
 
         PatternPath.push_back(ref(NIF));
-        if(NIF.SumUt == 164){
+        /*if(NIF.SumUt == 128){
             Cout_HUSPL3(NIF);
-        }
+        }*/
 
         if (NIF.SumUt >= MinUtil)
         {
@@ -1447,19 +1453,19 @@ int main()
     ExternalUt.insert(make_pair(0, 0));
     cout << endl;
 
-    str_EuFile = "simple2_utb.txt";
-    str_DBFile = "simple2_db.txt";
+    //str_EuFile = "simple_utb.txt";
+    //str_DBFile = "simple_db.txt";
 
     // str_EuFile = "jzwpaper_utb.txt";
     // str_DBFile = "jzwpaper_db.txt";
 
-    //str_EuFile = "05.foodmart_ExternalUtility.txt";
-    //str_DBFile = "05.foodmart.txt";
+    str_EuFile = "05.foodmart_ExternalUtility.txt";
+    str_DBFile = "05.foodmart.txt";
 
     // str_EuFile = "4_sign_ExternalUtility.txt";
     // str_DBFile = "4_sign.txt";
 
-    MinUtil = 154;
+    MinUtil = 2000;
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
