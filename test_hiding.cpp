@@ -496,7 +496,6 @@ void Cout_HUSPL3(L3_NodeInfo L3_node)
         {
             auto &inst = L3_node.L2_SeqInfo[j].L1_UtInfo[k];
             
-            // 💡 動態回溯：建立暫存陣列來收集路徑上的所有節點資訊
             vector<int> path_idx;
             vector<int> path_iu;
             vector<double> path_ut;
@@ -525,7 +524,6 @@ void Cout_HUSPL3(L3_NodeInfo L3_node)
             reverse(path_iu.begin(), path_iu.end());
             reverse(path_ut.begin(), path_ut.end());
 
-            // 💡 完美還原你舊版的陣列印出格式！
             cout << inst.IdxOfLastLevelIns << " ";
             
             cout << "[";
@@ -798,7 +796,7 @@ void REIHUSP_hiding(vector<reference_wrapper<L3_NodeInfo>> &PatternPath)
     int RoundCounter = 0;
     int MaxRound = 2;
 
-    while (TotalMDU > 0 && curdiff > 0 && RoundCounter < MaxRound)
+    while ( curdiff > 0 && RoundCounter < MaxRound)
     {
         RoundCounter++;
         double RutInThisRound = 0;
@@ -820,7 +818,12 @@ void REIHUSP_hiding(vector<reference_wrapper<L3_NodeInfo>> &PatternPath)
             if (TotalMDU > 0)
             {
                 AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
-            }
+            } /*else {
+                // 策略 B: Fallback 模式 (萬一表層全乾了 TotalMDU=0)
+                if (leafNode.SumUt > 0) {                    
+                AllocUt = ceil(diff * (KeepSeqUt / KeepSumUt));
+                }
+            }*/
 
             double TargetReduce = AllocUt + Unpaidrut;
             if (TargetReduce <= 0)
@@ -980,30 +983,27 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
             if (TotalMDU > 0)
             {
                 AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
-            }
-                
+            }                
 
             double TargetReduce = AllocUt + Unpaidrut;
             if (TargetReduce <= 0)
                 continue;
 
             double ActualReduced = 0;
-            double KeepReduceUt = TargetReduce;
+            double KeepReduceUt = TargetReduce; 
 
             for (int j = 0; j < (int)seq.L1_UtInfo.size(); j++)
             {
-                if (KeepReduceUt <= 0)
-                    break;
                 auto &inst = seq.L1_UtInfo[j];
+                
+                double curReduceUt = KeepReduceUt;
 
-                if (inst.CaseUtility <= (KeepSeqUt - KeepReduceUt))
+                if (inst.CaseUtility <= (KeepSeqUt - curReduceUt))
                     continue;
 
                 int sid = seq.sid;
                 int idx1b = inst.VecIndex;
                 int idx0 = idx1b - 1;
-
-                double localDropped = 0;
                 int curIu = inst.VecIu;
 
                 if (curIu > 1)
@@ -1011,7 +1011,7 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
                     int maxDiffIu = curIu - 1;
                     double maxDeltaU = maxDiffIu * eu;
 
-                    double needU = KeepReduceUt;
+                    double needU = curReduceUt; 
                     double usedDelta = min(needU, maxDeltaU);
 
                     int diffIu = (int)ceil(cleanUtil(usedDelta / eu));
@@ -1028,16 +1028,23 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
 
                     VecDataBase[sid].IuArray[idx0] = newIu;
                     applyDeltaOnDB(sid, idx1b, diffIu);
-
-                    localDropped = usedDelta;
-                    KeepReduceUt -= usedDelta;
+                    
                 }
-                ActualReduced += localDropped;
             }
 
+            double NewSeqUt = 0;
+            for (auto &inst : seq.L1_UtInfo) {
+                if (inst.CaseUtility > NewSeqUt) {
+                    NewSeqUt = inst.CaseUtility;
+                }
+            }
+            
+            ActualReduced = KeepSeqUt - NewSeqUt;
+            seq.SeqUt = NewSeqUt; 
+            
             RutInThisRound += ActualReduced;
-
-            if (ActualReduced < TargetReduce)
+            
+            if (ActualReduced < TargetReduce - 1e-6)
             {
                 Unpaidrut = TargetReduce - ActualReduced;
             }
@@ -1459,13 +1466,16 @@ int main()
     // str_EuFile = "jzwpaper_utb.txt";
     // str_DBFile = "jzwpaper_db.txt";
 
-    str_EuFile = "05.foodmart_ExternalUtility.txt";
-    str_DBFile = "05.foodmart.txt";
+    //str_EuFile = "05.foodmart_ExternalUtility.txt";
+    //str_DBFile = "05.foodmart.txt";
 
-    // str_EuFile = "4_sign_ExternalUtility.txt";
-    // str_DBFile = "4_sign.txt";
+    str_EuFile = "01.bible_ExternalUtility.txt";
+    str_DBFile = "01.bible.txt";
 
-    MinUtil = 2000;
+    //str_EuFile = "4_sign_ExternalUtility.txt";
+    //str_DBFile = "4_sign.txt";
+
+    MinUtil = 127931;
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
