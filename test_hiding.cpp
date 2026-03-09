@@ -942,20 +942,24 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
 
     for (int i = 0; i < (int)Node_SingleItem[IdxItem].L2_SeqInfo.size(); i++)
     {
-        auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
         double MaxseqMDU = 0;
+        auto &seq = Node_SingleItem[IdxItem].L2_SeqInfo[i];
         
         for (auto &inst : seq.L1_UtInfo)
         {
-            double seqMDU = 0;
+            double seqMDU = 0; 
             if (inst.VecIu > 1)
             {
-                seqMDU += (inst.VecIu - 1) * eu;
+                seqMDU = (inst.VecIu - 1) * eu; 
             }
             MaxseqMDU = max(seqMDU, MaxseqMDU);
         }
         VecSeqMDU[i] = MaxseqMDU;
         TotalMDU += MaxseqMDU;
+    }
+    if (diff > TotalMDU) {
+        cout << "[學術發現] 單一項目 " << Item << " 撞上數學之壁！" 
+             << " (需要扣除: " << diff << ", 但把資料庫榨乾最多只能扣: " << TotalMDU << ")" << endl;
     }
 
     double curdiff = diff;
@@ -963,7 +967,7 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
     int RoundCounter = 0;
     int MaxRound = 2;
 
-    while (curdiff > 0 && RoundCounter < MaxRound)
+    while (TotalMDU > 0 && curdiff > 0 && RoundCounter < MaxRound) 
     {
         RoundCounter++;
         double RutInThisRound = 0;
@@ -982,23 +986,22 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
             double AllocUt = 0;
             if (TotalMDU > 0)
             {
-                AllocUt = ceil(diff * (VecSeqMDU[i] / TotalMDU));
-            }                
+                AllocUt = ceil(cleanUtil(diff * (VecSeqMDU[i] / TotalMDU)));
+            }
 
             double TargetReduce = AllocUt + Unpaidrut;
             if (TargetReduce <= 0)
                 continue;
 
-            double ActualReduced = 0;
             double KeepReduceUt = TargetReduce; 
 
             for (int j = 0; j < (int)seq.L1_UtInfo.size(); j++)
             {
                 auto &inst = seq.L1_UtInfo[j];
-                
+
                 double curReduceUt = KeepReduceUt;
 
-                if (inst.CaseUtility <= (KeepSeqUt - curReduceUt))
+                if (inst.CaseUtility <= (KeepSeqUt - curReduceUt) + 1e-6)
                     continue;
 
                 int sid = seq.sid;
@@ -1011,7 +1014,7 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
                     int maxDiffIu = curIu - 1;
                     double maxDeltaU = maxDiffIu * eu;
 
-                    double needU = curReduceUt; 
+                    double needU = curReduceUt;
                     double usedDelta = min(needU, maxDeltaU);
 
                     int diffIu = (int)ceil(cleanUtil(usedDelta / eu));
@@ -1038,12 +1041,12 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
                     NewSeqUt = inst.CaseUtility;
                 }
             }
-            
-            ActualReduced = KeepSeqUt - NewSeqUt;
+
+            double ActualReduced = KeepSeqUt - NewSeqUt;
             seq.SeqUt = NewSeqUt; 
             
             RutInThisRound += ActualReduced;
-            
+
             if (ActualReduced < TargetReduce - 1e-6)
             {
                 Unpaidrut = TargetReduce - ActualReduced;
@@ -1475,7 +1478,7 @@ int main()
     //str_EuFile = "4_sign_ExternalUtility.txt";
     //str_DBFile = "4_sign.txt";
 
-    MinUtil = 127931;
+    MinUtil = 200000;
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
