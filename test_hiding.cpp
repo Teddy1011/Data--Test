@@ -105,7 +105,7 @@ int I_ExtensionCounter = 0;
 int S_ExtensionCounter = 0;
 int TotalPatternCounter = 0;
 double SumSWU = 0;
-double MinUtil = 0;
+double MinUtil;
 double memoryMB = 0;
 double SumDiff = 0;
 
@@ -796,7 +796,7 @@ void REIHUSP_hiding(vector<reference_wrapper<L3_NodeInfo>> &PatternPath)
     int RoundCounter = 0;
     int MaxRound = 2;
 
-    while ( curdiff > 0 && RoundCounter < MaxRound)
+    while (TotalMDU > 0 && curdiff > 0 && RoundCounter < MaxRound)
     {
         RoundCounter++;
         double RutInThisRound = 0;
@@ -921,6 +921,7 @@ void REIHUSP_hiding(vector<reference_wrapper<L3_NodeInfo>> &PatternPath)
     }
 }
 
+
 void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
 {
     if (IdxNodeSingleItem.find(Item) == IdxNodeSingleItem.end())
@@ -958,8 +959,8 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
         TotalMDU += MaxseqMDU;
     }
     if (diff > TotalMDU) {
-        cout << "[學術發現] 單一項目 " << Item << " 撞上數學之壁！" 
-             << " (需要扣除: " << diff << ", 但把資料庫榨乾最多只能扣: " << TotalMDU << ")" << endl;
+        cout << "[Find] " << Item << " Out Of Math LIMIT" 
+             << " (TotalDiff: " << diff << ", TotalMDU:  " << TotalMDU << ")" << endl;
     }
 
     double curdiff = diff;
@@ -1064,7 +1065,6 @@ void SingleItem_Hiding(vector<L3_NodeInfo> &Node_SingleItem, int Item)
             break;
     }
 }
-
 void HUSP(L3_NodeInfo &NodeUC)
 {
     if (NodeUC.SumPEU < MinUtil)
@@ -1395,6 +1395,7 @@ void HUSP(L3_NodeInfo &NodeUC)
 
         if (NIF.SumUt >= MinUtil)
         {
+            //cout << "???" << endl;
             S_ExtensionCounter++;
             REIHUSP_hiding(PatternPath);
         }
@@ -1406,7 +1407,7 @@ void HUSP(L3_NodeInfo &NodeUC)
 
 void DBWriteBack(vector<SeqData> VecDataBase)
 {
-    string Filename = "Output_" + str_DBFile + "_Minutil_";
+    string Filename = "Adjust_" + str_DBFile + "_Minutil_";
     Filename.append(to_string((int)MinUtil).append(".txt"));
     ofstream writeFile(Filename);
     if (writeFile.is_open())
@@ -1463,22 +1464,29 @@ int main()
     ExternalUt.insert(make_pair(0, 0));
     cout << endl;
 
-    //str_EuFile = "simple_utb.txt";
-    //str_DBFile = "simple_db.txt";
+    str_EuFile = "simple_utb.txt";
+    str_DBFile = "simple_db.txt";
 
     // str_EuFile = "jzwpaper_utb.txt";
     // str_DBFile = "jzwpaper_db.txt";
 
-    //str_EuFile = "05.foodmart_ExternalUtility.txt";
-    //str_DBFile = "05.foodmart.txt";
+    str_EuFile = "05.foodmart_ExternalUtility.txt";
+    str_DBFile = "05.foodmart.txt";
 
-    str_EuFile = "01.bible_ExternalUtility.txt";
-    str_DBFile = "01.bible.txt";
+    //str_EuFile = "01.bible_ExternalUtility.txt";
+    //str_DBFile = "01.bible.txt";
+    
+    //str_EuFile = "03.bms2_ExternalUtility.txt";
+    //str_DBFile = "03.bms2.txt";
 
     //str_EuFile = "4_sign_ExternalUtility.txt";
     //str_DBFile = "4_sign.txt";
 
-    MinUtil = 200000;
+    //str_EuFile = "7.RSCS_ExternalUtility.txt";
+    //str_DBFile = "7.RSCS.txt";   
+     
+    MinUtil = 2000;
+
     cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
     cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
     cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;
@@ -1486,6 +1494,17 @@ int main()
     Read_ExternalUt(str_EuFile);
     Read_Database(str_DBFile);
     BulidSingleItems(VecDataBase);
+
+    /*double Percentage = 0.12;
+    double Threshold = Percentage * 0.01;
+    //MinUtil = 0;
+    MinUtil = SumSWU * Threshold;
+
+    //cout << MinUtil << "=" << SumSWU << "*" << Threshold << endl;
+    cout << "*** (Hiding)Min utility = " << MinUtil << " ***" << endl;
+    cout << "*** (Hiding)Database : " << str_DBFile << " ***" << endl;
+    cout << "*** (Hiding)Eu : " << str_EuFile << " ***" << endl;*/
+
 
     double time = 0;
     clock_t start, end;
@@ -1498,7 +1517,7 @@ int main()
         if (Node_SingleItem[i].SumUt >= MinUtil)
         {
             Single_ItemCounter++;
-            SingleItem_Hiding(Node_SingleItem, i);
+            SingleItem_Hiding(Node_SingleItem, stoi(Node_SingleItem[i].pattern));
         }
 
         PatternPath.push_back(ref(Node_SingleItem[i]));
